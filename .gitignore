@@ -3,4 +3,5 @@ tools/
 __pycache__/
 *.pyc
 .worktrees/
+.claude/
 work/
