@@ -1,0 +1,6 @@
+tools/
+.venv/
+__pycache__/
+*.pyc
+.worktrees/
+work/
