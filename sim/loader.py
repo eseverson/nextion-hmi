@@ -54,8 +54,17 @@ def load_hmi(path: str | Path) -> DisplayState:
     from Nextion2Text import HMI
 
     hmi = HMI(str(path))
+    # Pair each parsed Page with the matching directory entry so we can
+    # recover the page id from the .pa filename prefix (e.g. "0.pa" → 0).
+    # The HMI's `page <n>` command, the firmware's commands, and Touch
+    # event payloads all use this id, NOT the directory's iteration order.
+    page_dir_entries = [c for c in hmi.header.content if c.isPage()]
+    assert len(page_dir_entries) == len(hmi.pages), (
+        f"directory page count {len(page_dir_entries)} != "
+        f"parsed page count {len(hmi.pages)}"
+    )
     pages: dict[str, Page] = {}
-    for page_index, n2t_page in enumerate(hmi.pages):
+    for n2t_page, dir_entry in zip(hmi.pages, page_dir_entries):
         page_comp = next(
             (c for c in n2t_page.components if c.rawData["att"].get("type") == 121),
             None,
@@ -64,6 +73,11 @@ def load_hmi(path: str | Path) -> DisplayState:
             continue
         pa = page_comp.rawData["att"]
         page_name = pa.get("objname") or f"page{len(pages)}"
+        # dir_entry.name is something like "0.pa"; the integer prefix is the id.
+        try:
+            page_id = int(dir_entry.name.split(".", 1)[0])
+        except (ValueError, AttributeError):
+            page_id = len(pages)
         components: list[Component] = []
         for c in n2t_page.components:
             ca = c.rawData["att"]
@@ -83,12 +97,9 @@ def load_hmi(path: str | Path) -> DisplayState:
                     events=events,
                 )
             )
-        # The page-meta component's "id" is always 0 in the HMI; the real
-        # page id (used by `page <n>` commands at runtime) is the page's
-        # position in the HMI page list.
         pages[page_name] = Page(
             name=page_name,
-            id=page_index,
+            id=page_id,
             attrs=dict(pa),
             components=components,
         )
