@@ -26,6 +26,19 @@ def _now_ms() -> int:
     return int(time.monotonic() * 1000)
 
 
+def _replace_text(widget: tk.Text, new_text: str, preserve_scroll: bool = False) -> None:
+    """Replace a Text widget's contents while preserving scroll position
+    (and not flickering the focus-ring). Caller is responsible for only
+    invoking this when content has actually changed."""
+    yview = widget.yview() if preserve_scroll else None
+    widget.config(state=tk.NORMAL)
+    widget.delete("1.0", tk.END)
+    widget.insert(tk.END, new_text)
+    widget.config(state=tk.DISABLED)
+    if yview is not None:
+        widget.yview_moveto(yview[0])
+
+
 class App:
     def __init__(
         self,
@@ -41,9 +54,13 @@ class App:
         self.scale = scale
         self.log_commands = log_commands
         self.timer_sched = TimerScheduler(state)
-        self._command_log: list[str] = []
+        self._command_log: list[tuple[str, str]] = []
         self._command_history: list[str] = []
         self._history_idx: int | None = None
+        # Cache last rendered content so we don't trample the user's
+        # selection / scroll position by rewriting widgets every tick.
+        self._last_state_text = ""
+        self._last_comp_text = ""
 
         self.root = tk.Tk()
         self.root.title("Nextion sim")
@@ -151,11 +168,13 @@ class App:
         self._log_text.tag_configure("err", foreground="#f48771")
 
     def _refresh_inspector(self) -> None:
+        """Refresh the state + components panels, but ONLY when content
+        actually changed. We compare against a cached string so the user's
+        selection / scroll / cursor isn't blown away every 33 ms when
+        nothing meaningful has happened.
+        """
         page = self.state.active_page
-        # State block
-        self._state_text.config(state=tk.NORMAL)
-        self._state_text.delete("1.0", tk.END)
-        self._state_text.insert(tk.END,
+        new_state = (
             f"page    : {page.name} (id={page.id})\n"
             f"size    : {page.attrs.get('w')}x{page.attrs.get('h')}\n"
             f"dim     : {self.state.dim}\n"
@@ -163,11 +182,12 @@ class App:
             f"sys[1]  : {self.state.sys[1]}\n"
             f"sys[2]  : {self.state.sys[2]}\n"
         )
-        self._state_text.config(state=tk.DISABLED)
+        if new_state != self._last_state_text:
+            _replace_text(self._state_text, new_state)
+            self._last_state_text = new_state
 
-        # Components block — show every component with current val/txt/colors
-        self._comp_text.config(state=tk.NORMAL)
-        self._comp_text.delete("1.0", tk.END)
+        # Components — render to a string first, diff against cache.
+        rows = []
         for c in sorted(page.components, key=lambda c: c.attrs.get("id", 0)):
             a = c.attrs
             line = f"{c.id:>3} {c.name:<10}"
@@ -177,18 +197,26 @@ class App:
                 line += f" val={a['val']}"
             if a.get("bco") is not None:
                 line += f" bco={a['bco']}"
-            self._comp_text.insert(tk.END, line + "\n")
-        self._comp_text.config(state=tk.DISABLED)
+            rows.append(line)
+        new_comp = "\n".join(rows) + "\n"
+        if new_comp != self._last_comp_text:
+            _replace_text(self._comp_text, new_comp, preserve_scroll=True)
+            self._last_comp_text = new_comp
 
     def _log(self, direction: str, text: str) -> None:
         self._command_log.append((direction, text))
         if len(self._command_log) > LOG_LINES:
             self._command_log = self._command_log[-LOG_LINES:]
+        # Append-only — never wipe the existing log content (which would
+        # clobber any selection the user has). We just truncate from the top
+        # if we exceed the line cap.
         self._log_text.config(state=tk.NORMAL)
-        self._log_text.delete("1.0", tk.END)
-        for d, t in self._command_log:
-            prefix = {"rx": "<-", "tx": "->", "ui": ">>", "err": "!!"}.get(d, "  ")
-            self._log_text.insert(tk.END, f"{prefix} {t}\n", d)
+        prefix = {"rx": "<-", "tx": "->", "ui": ">>", "err": "!!"}.get(direction, "  ")
+        # If buffer has too many lines, drop the oldest from the widget too.
+        line_count = int(self._log_text.index("end-1c").split(".")[0])
+        if line_count > LOG_LINES:
+            self._log_text.delete("1.0", f"{line_count - LOG_LINES + 1}.0")
+        self._log_text.insert(tk.END, f"{prefix} {text}\n", direction)
         self._log_text.see(tk.END)
         self._log_text.config(state=tk.DISABLED)
 
@@ -368,9 +396,12 @@ class App:
         try:
             self._drain_transport()
             self.timer_sched.tick(_now_ms(), self._on_timer_fire)
-            if self.state.dirty:
+            # Capture dirty BEFORE _redraw clears it; gate the inspector on
+            # the same flag so we don't rewrite text widgets every 33 ms.
+            was_dirty = self.state.dirty
+            if was_dirty:
                 self._redraw()
-            self._refresh_inspector()
+                self._refresh_inspector()
         except Exception:
             log.exception("tick error")
         self.root.after(TICK_MS, self._tick)
