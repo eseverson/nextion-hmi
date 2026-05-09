@@ -169,36 +169,59 @@ This **resolves H6 negatively** for the same-save case: the HMI does
 not compact deleted components on save. Confirms Path A's append-only
 journal hypothesis.
 
-### G10. **H1+0x14 is a one-shot "this project has been re-saved" flag**, not orientation
+### G10 (REVISED). **H1+0x14 IS the orientation byte**
 
-EVERY post-baseline experiment shows H1+0x14 changing from `0x01` to
-`0x03`. Including experiment 01 where the user *did not actually
-change orientation* (its TFT user-code is byte-identical to baseline).
+Initial reading: H1+0x14 changed from 0x01 → 0x03 in *every* post-baseline
+experiment, including experiment 01 where I thought the user hadn't
+actually flipped orientation. Concluded H1+0x14 was a "modified-since-
+creation" flag.
 
-So H1+0x14 is NOT orientation. It's a state byte. The +2 increment
-(01 → 03) is identical across all subsequent saves. Hypothesis: it's
-a 2-bit field where bit 0 ("project exists") is always 1 and bit 1
-("modified since first creation") flips to 1 on the first re-save
-after creation.
+**Correction (per user clarification):** The user did successfully
+flip 180° in experiment 01 — without needing to relocate any
+components, because 180° rotation preserves the screen's aspect ratio,
+so all components landed on the (rotated) screen. The reason
+experiments 04–11 all show H1+0x14 = 0x03 is the **cumulative**
+nature of the experiments: 01 flipped the orientation, and all later
+saves inherited that 0x03 value.
 
-Once flipped, it stays at 0x03 across all subsequent saves regardless
-of content (verified across 01, 04–11). It's NOT a save counter.
+So H1+0x14 IS the orientation byte. Three known values now:
 
-This **opens new unknown H20**: where IS orientation actually stored
-in H1? The `vertical.HMI/.tft` files in `_old/` (the original
-orientation experiment, with body confound) showed H1+0x14 changing
-from 01 to 00, AND H1+0x3c changing (file_size grew). So H1+0x14 is
-orientation-related ONLY in the sense that it tracks "modified since
-creation".
+| Source | H1+0x14 | Orientation |
+|--------|---------|-------------|
+| baseline | `0x01` | Original (horizontal, 0°) |
+| `_old/vertical.tft` | `0x00` | 90° (the earlier flip that needed component relocation; aspect ratio changed) |
+| `01_orientation_flip/01.tft` | `0x03` | 180° |
+| (270° not yet tested) | likely `0x02` | predicted |
 
-### G11. **H2 changes are driven by H1+0x3c (file_size) alone, not by H1+0x14**
+**Crucial distinction observed:**
+- **180° flip** (`01_orientation_flip`) leaves user-code byte-identical
+  to baseline. Rotation is purely a runtime hint via H1+0x14.
+- **90° flip** (`_old/vertical`) changes user-code dramatically (the
+  21 KB diff). When the aspect ratio actually flips, coordinate
+  literals must be rebaked to the new (320, 480) screen.
 
-Experiment 01 changed H1+0x14 (01→03) but **left H2 byte-identical**.
-Experiments 04–11 changed BOTH H1+0x14 (same 01→03) AND H1+0x3c (file
-grew) → H2 changed in proportion to the file-size delta.
+So the editor *only* bakes coordinate transformations when the aspect
+ratio changes; 180° rotations are runtime-applied. This is more
+sophisticated than "orientation is always baked" or "orientation is
+always runtime" — it's both, depending on aspect.
 
-So H2's deterministic transform (per F3 from batch 1) is keyed
-specifically on **file_size**, not on the H1+0x14 byte.
+This **resolves H20**: orientation lives in H1+0x14. (Initially I
+opened H20 because I thought H1+0x14 wasn't orientation. The user's
+correction reverses that.)
+
+### G11. **H2 doesn't propagate H1+0x14 (orientation), only H1+0x3c (file_size)**
+
+Experiment 01 changed H1+0x14 (orientation 0°→180°) but **left H2
+byte-identical**. Experiments 04–11 changed H1+0x3c (file grew) → H2
+changed in proportion to the file-size delta.
+
+So **the H2 encryption is computed from a *subset* of H1's bytes** —
+file_size is in the subset, orientation is not. Any other H1 fields
+that don't propagate to H2 are also in the "ignored" set.
+
+This narrows the F-series H2 XOR key search even more sharply:
+**H2 = f(file_size) (and possibly other yet-untested H1 fields, but
+not orientation).**
 
 This narrows the F-series H2 XOR-key search significantly. The "key"
 applied to H1+0x3c (a 4-byte LE u32) is what we're hunting. Pairs of
@@ -267,10 +290,10 @@ task, not an open-ended question.
 
 - **H1**: Page CRC algorithm — narrowed to a brute-forceable problem (G13).
 - **H2, H3, H4, H5, H7, H13, H14, H16, H19**: still open.
-- **H20** (new): where IS orientation stored, given H1+0x14 is just a
-  modification flag?
-- **T1**: H2 transform — narrowed to a function-of-file_size attack
-  (G11). Multi-known-plaintext analysis can probably crack it.
+- **H20** (resolved by G10 revision): orientation lives at H1+0x14.
+- **T1**: H2 transform — narrowed to a function of {file_size, ...} but
+  NOT orientation (G11). Multi-known-plaintext analysis can probably
+  crack it.
 - **T2**: 128-byte H2 unmodelled region — needs T1 first.
 
 ## Next concrete steps

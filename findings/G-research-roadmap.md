@@ -46,8 +46,8 @@ Keep entries short. Status legend:
 | H16 | Editor version field bytes (where in H1?) | Open the project in a different editor version and re-save — out of scope unless multiple editors available | `[!]` |
 | H17 | What encodes at usercode+0x715f4 (4 bytes that change every save)? | Diff per-save outputs vs known-changing inputs (timestamp? RNG?). `13_save_six_times` will show whether the value monotonically changes or is random. | `[x]` Resolved by [G1](I-experiment-batch-2.md): doesn't change on no-content saves; only refreshed on recompile. Likely a compile-time hash. |
 | H18 | What encodes at usercode+0x71634 (1-byte save counter)? | `13_save_six_times` should confirm linear increment per save. | `[x]` Resolved by [G1](I-experiment-batch-2.md): doesn't increment on no-content saves; refreshed only on recompile. |
-| H19 | Page coordinate encoding (orientation flip rotates *literals*) | `06_bco_magenta` + `07_add_hotspot` — distinctive bbox values | `[ ]` (new from F4) |
-| H20 | Where is orientation actually stored in H1? (H1+0x14 turned out to be a "modified-since-creation" flag, not orientation) | A clean orientation flip in a project where no components need relocating | `[ ]` (new from G10) |
+| H19 | Page coordinate encoding (90°/270° flips rotate *literals*; 180° doesn't) | `06_bco_magenta` + `07_add_hotspot` — distinctive bbox values | `[ ]` (new from F4) |
+| H20 | Where is orientation stored in H1? | Direct observation across baseline/01/vertical | `[x]` Resolved by [G10 revised](I-experiment-batch-2.md): **H1+0x14**. 0x01=0°, 0x00=90°, 0x03=180°. 180° is runtime-only (user code unchanged); 90°/270° rebake coords. |
 
 ## 2. TFT format unknowns
 
@@ -213,3 +213,4 @@ Append a dated entry every time something here changes status.
 | 2026-05-09 | Cleanup: removed `02_dim_default`, `03_baud_change`, `12_save_no_change` experiment folders — fully resolved by batch 1. Open queue down from 14 to 11. |
 | 2026-05-09 | Caveat added to F4: user reported that the orientation flip required relocating/resizing components to keep them in-screen, so the 21 KB user-code diff includes user-driven layout changes, not just orientation. F1/F2/F3/F5/F6 remain clean. T1 progress unaffected (H1↔H2 mapping doesn't depend on user-code body). |
 | 2026-05-09 | Batch 2 analysis (`tests/editor outputs/{01,04..11,13}/`). 13 findings landed in [`I-experiment-batch-2.md`](I-experiment-batch-2.md). Resolved: H8 (rev), H9, H11, H17, H18. Narrowed: H1, H6, H10, H12, H15, T1. New unknown: H20 (orientation field location). Key revision: experiments were cumulative (each builds on previous), and pure no-change saves are byte-identical at the TFT level (revising F2). |
+| 2026-05-09 | G10 revised by user clarification: 180° flip didn't need component relocation (only the earlier 90° flip did). So H1+0x14 *is* the orientation byte, and the reason every post-baseline experiment shows it at 0x03 is the cumulative experiment chain — 01 set it to 0x03 (180°) and all later saves inherited. **Crucial:** 180° rotation is runtime-applied (user code unchanged); only 90°/270° rebake coords. H20 resolved. |
