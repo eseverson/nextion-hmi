@@ -59,6 +59,8 @@ def main() -> int:
     ap.add_argument("--headless-out", default=str(REPO_ROOT / "work" / "live.png"))
     ap.add_argument("--http", type=int, default=None, metavar="PORT",
                     help="Also start an HTTP introspection/control server on PORT.")
+    ap.add_argument("--record", default=None, metavar="PATH",
+                    help="Record framed I/O to PATH (JSONL); replay with scripts/replay.py.")
     args = ap.parse_args()
 
     logging.basicConfig(
@@ -70,6 +72,10 @@ def main() -> int:
     if args.start_page and args.start_page in state.pages:
         state.active_page = state.pages[args.start_page]
     transport = _build_transport(args.bind)
+    if args.record:
+        from sim.recorder import RecordingTransport
+        transport = RecordingTransport(transport, args.record)
+        print(f"Recording to {args.record}", flush=True)
     if args.headless:
         print(f"Headless: rendering to {args.headless_out}", flush=True)
         app = HeadlessApp(state, transport, out_path=args.headless_out,
