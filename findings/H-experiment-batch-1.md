@@ -69,27 +69,36 @@ offset, so the corresponding H2 difference IS the key applied to that
 known H1 mutation. **Knowing what changed in H1 + observing what
 changed in H2 directly reveals where the key is applied.**
 
-### F4. Orientation rebuilds the user code with rotated coordinates
+### F4. Orientation rebuilds the user code with rotated coordinates (partial)
 
-The `vertical` experiment was expected to be a single-bit flag flip.
-Instead the TFT grew by 500 bytes and 21 KB of user code differed.
-Investigation: the bytes that changed include literal coordinate values:
+**CAVEAT:** The `vertical` experiment was confounded — the editor
+required some components to be relocated or resized to fit the new
+orientation without overflowing the screen. So the 21 KB user-code diff
+combines TWO changes: (a) the orientation flip itself, (b) the user's
+manual repositioning. We can't cleanly isolate orientation's effect on
+user code from this single sample.
 
-```
-a=302c302c3438302c3332    "0,0,480,32"
-b=302c302c3332302c3438    "0,0,320,48"
-```
+What we *can* say:
+- **Coordinate literals do shift in compiled output.** The bytes
+  `302c302c3438302c3332` ("0,0,480,32") morph into `302c302c3332302c3438`
+  ("0,0,320,48"). So the editor stores positions as post-rotation
+  literals, not as a (coords, rotation_flag) pair. This is the H19
+  hypothesis confirmed in principle, even if the magnitude is exaggerated
+  by the relocations.
+- **The 500-byte file growth is overstated** — most of it is the user's
+  layout changes, not orientation per se. A clean orientation flip
+  (with no relocation needed) would likely change only a handful of
+  literals plus the H1 orientation byte.
 
-So the editor doesn't store "orientation" as a runtime hint to be
-applied to a fixed coordinate system — it **bakes coordinate rotation
-into the compiled output** at compile time. Components that were
-declared at (0,0,480,320) now compile to (0,0,320,480) literals.
-
-This affects roadmap **H1** indirectly: the page CRC is on the
-post-rotation coordinates, so two project files that look "the same"
-to the user but have different orientation produce wildly different
-page payloads. To probe page CRC algorithm, we must keep orientation
-constant.
+Implications:
+- **F1, F2, F3, F5, F6 are unaffected** — they're about H1/H2/CRC
+  propagation, which doesn't depend on user-code body content (per F3
+  itself). The orientation experiment is still a clean probe for T1
+  (F-series H2 XOR key) because H1 changed in known ways (7 bytes:
+  orientation byte at +0x14, file_size at +0x3c, H1 CRC at +0xC4).
+- For probing component-record layout (H9, H10, H11, H12), use the
+  numbered experiments 04–07 — those mutate single attributes without
+  triggering global layout changes.
 
 ### F5. `230400 baud` is a 2-byte-only change to compiled Program.s
 

@@ -15,8 +15,14 @@ therefore our best shot at the F-series H2 XOR key.
    `Vertical` set it to `Inverted Vertical`). Either flip is fine — the
    point is to change the field by *one step*.
 5. Click OK / apply.
-6. `File → Save`.
-7. `File → Compile`.
+6. **If the editor complains that components are out of bounds, you
+   must reposition or resize them — that's a confound that pollutes the
+   user-code diff** (the H1/H2 part of the diff is still clean per F3).
+   If you want a perfectly clean orientation experiment, build a
+   throwaway project with everything inside a small central rectangle
+   so a 180° flip never pushes anything off-screen.
+7. `File → Save`.
+8. `File → Compile`.
 
 ## Files to drop in this folder
 
