@@ -49,38 +49,70 @@ Each path's findings live in `findings/<path>-*.md`. The synthesis lives in
 - [MMMZZZZ/Nextion2Text](https://github.com/MMMZZZZ/Nextion2Text) — read-only HMI dump
 - [hagronnestad/nextion-font-editor](https://github.com/hagronnestad/nextion-font-editor) — ZI fonts (full read+write for v3, partial v5/v6)
 
-## Live simulator (P0 + P1)
+## Live simulator
 
-Linux process that renders the dashboard and accepts the same
-`\xff\xff\xff`-framed serial commands the firmware sends. Pluggable transport
-(TCP / PTY / stdin), Tk window, click-to-touch event emission. **P1 adds**
-expression evaluation, `if`/`while`/`for`, event-handler execution, drawing
-primitives, and the `sys0/sys1/sys2` + `dp` system variables. The Timer
-event on the main page now fires automatically — the per-XFloat warning
-colours flip on threshold without the firmware sending those writes.
+Linux process that renders the dashboard and behaves like a real Nextion
+panel: accepts the same `\xff\xff\xff`-framed serial commands the firmware
+sends, runs HMI event-handler scripts (Timer reactivity, page load/unload,
+touch press/release), and emits canonical Nextion events back over the
+wire when the user clicks a widget.
+
+### Quick start
 
 ```bash
-# Start the simulator (listens on tcp://127.0.0.1:9999 by default).
+# Default Tk window, listens on tcp://127.0.0.1:9999
 python3 scripts/nextion_sim.py
 
 # In another terminal — bundled helper, frames each command for you:
 scripts/send.py 'x0.val=12345' 's0.txt="MAP Error"' 'page settings'
-
-# Or by hand. Note: portable framing matters — OpenBSD nc takes -N to close
-# stdin after EOF; nmap ncat uses --send-only; the helper above avoids both.
-printf 'x0.val=12345\xff\xff\xff' | ncat --send-only 127.0.0.1 9999
+scripts/send.py --touch m0                          # click the hotspot
+scripts/send.py --state --http-port 8080            # JSON dump of sim state
 ```
 
-`--bind pty` creates a `/dev/pts/N` path you can point real serial-using
-code at (open it as a regular tty). `--bind stdin` reads commands from
-stdin — useful for scripted tests.
+### Transports (`--bind`)
 
-Supported runtime command surface (TCP / PTY / stdin):
-`<obj>.<attr>=<expr>` (with full expression RHS), `<sys|dim>=<expr>`,
-`page <id|name>` (fires `codesload`/`codesunload`), `cls`, `fill`, `line`,
-`cir`, `cirs`, `cle`, `xstr`, `vis`, `tsw`, `print`, `printh`, `ref`.
+| Spec | Use |
+|------|------|
+| `tcp:127.0.0.1:9999` (default) | Local TCP socket — the easiest |
+| `tcp:0.0.0.0:9999`             | Reachable from another host |
+| `pty`                          | Creates `/dev/pts/N` for serial-using code |
+| `serial:/dev/ttyUSB0:115200`   | Open an existing serial device — hardware-in-the-loop |
+| `stdin`                        | Read commands from stdin (scripted tests) |
+
+### Other flags
+
+- `--scale N` — integer pixel zoom for the Tk window
+- `--start-page main` — initial active page
+- `--headless [--headless-out work/live.png]` — no Tk; write rendered frames to a file each tick
+- `--http 8080` — start an HTTP introspection / control server on the side
+  - `GET /` — auto-refreshing live preview
+  - `GET /frame.png` — current frame
+  - `GET /state.json` — JSON dump (active page, sys vars, components, etc.)
+  - `POST /command` — body is a Nextion command (no terminator)
+  - `POST /touch` — body is `<target>[ press|release|click]`
+- `--record session.jsonl` — capture all framed I/O to JSONL; replay later with `scripts/replay.py`
+- `--log-commands` — log every received frame at INFO
+
+### Supported runtime command surface
+
+`<obj>.<attr>=<expr>` (full expression RHS — arithmetic, comparison,
+logical, attr refs), `<sys|dim>=<expr>`, `page <id|name>` (fires
+`codesload`/`codesunload`), `cls`, `fill`, `line`, `cir`, `cirs`, `cle`,
+`xstr`, `vis`, `tsw`, `print`, `printh`, `ref`. Plus the sim-only
+extension `touch <target>[ press|release|click]` for scripted touch
+injection.
+
 Event handlers from the HMI run in real time: page load/unload, component
 press/release, and Timer events. `Program.s` runs once at boot.
 
-Tests: `pytest tests/sim/` (116 passing). Design + plans:
-`docs/specs/2026-05-09-nextion-simulator-{design,plan,p1-plan}.md`.
+### Tests
+
+`pytest tests/sim/` — 140+ tests covering parser, executor, transports,
+renderer, scripts, expressions, draws, timer scheduler, headless mode,
+HTTP server, recorder, and the firmware-replay snapshot.
+
+### Design / plans
+
+- `docs/specs/2026-05-09-nextion-simulator-design.md`
+- `docs/specs/2026-05-09-nextion-simulator-plan.md` (P0)
+- `docs/specs/2026-05-09-nextion-simulator-p1-plan.md` (P1)
