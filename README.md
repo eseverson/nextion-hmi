@@ -59,10 +59,12 @@ Linux process that renders the dashboard and accepts the same
 # Start the simulator (listens on tcp://127.0.0.1:9999 by default).
 python3 scripts/nextion_sim.py
 
-# In another terminal:
-printf 'x0.val=12345\xff\xff\xff' | nc -N 127.0.0.1 9999
-printf 's0.txt="MAP Error"\xff\xff\xff' | nc -N 127.0.0.1 9999
-printf 'page settings\xff\xff\xff' | nc -N 127.0.0.1 9999
+# In another terminal — bundled helper, frames each command for you:
+scripts/send.py 'x0.val=12345' 's0.txt="MAP Error"' 'page settings'
+
+# Or by hand. Note: portable framing matters — OpenBSD nc takes -N to close
+# stdin after EOF; nmap ncat uses --send-only; the helper above avoids both.
+printf 'x0.val=12345\xff\xff\xff' | ncat --send-only 127.0.0.1 9999
 ```
 
 `--bind pty` creates a `/dev/pts/N` path you can point real serial-using
