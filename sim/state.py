@@ -141,6 +141,8 @@ class ScriptContext:
             return self.state.sys[_SYS_NAMES[name]]
         if name == "dp":
             return self.state.active_page.id
+        if name in ("dim", "dims"):
+            return self.state.dim
         # Bare component name → take its .val (for Variable components and
         # short-form attribute reads in scripts).
         c = self.state.resolve(ComponentRef(name))
@@ -159,6 +161,10 @@ class ScriptContext:
             return
         if name == "dp":
             return  # read-only
+        if name in ("dim", "dims"):
+            self.state.dim = max(0, min(100, int(value)))
+            self.state.dirty = True
+            return
         # Existing local → update; component name → write its .val; else new local
         if name in self.locals:
             self.locals[name] = value
