@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nextion-sim"
+version = "0.0.1"
+requires-python = ">=3.10"
+dependencies = ["Pillow>=9"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
