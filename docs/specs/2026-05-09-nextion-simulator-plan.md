@@ -1257,7 +1257,7 @@ git commit -m "sim: transports (tcp/stdin/pty) + EventEmitter"
 This refactors the rendering logic out of `scripts/preview_page.py` so the
 sim can reuse it. The previewer becomes a thin wrapper.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/sim/test_renderer.py
@@ -1283,9 +1283,9 @@ def test_renderer_respects_dim(hmi_path):
     assert avg_dim < avg_full * 0.6
 ```
 
-- [ ] **Step 2: Run, see them fail**
+- [x] **Step 2: Run, see them fail**
 
-- [ ] **Step 3: Implement `sim/renderer.py` by extracting from `preview_page.py`**
+- [x] **Step 3: Implement `sim/renderer.py` by extracting from `preview_page.py`**
 
 Copy the rendering helpers (`rgb565_to_rgb888`, `find_font_file`, `load_font`, `font_size_for`, `align_text`, `format_xfloat`, `render_component`) from `scripts/preview_page.py` into `sim/renderer.py`. Then add the class:
 
@@ -1320,7 +1320,7 @@ class Renderer:
         return img
 ```
 
-- [ ] **Step 4: Rewire `scripts/preview_page.py`**
+- [x] **Step 4: Rewire `scripts/preview_page.py`**
 
 Replace its `render_page` function body with:
 
@@ -1367,7 +1367,7 @@ def main() -> int:
     return 0
 ```
 
-- [ ] **Step 5: Run renderer tests + previewer**
+- [x] **Step 5: Run renderer tests + previewer**
 
 ```
 pytest tests/sim/test_renderer.py -v
@@ -1376,7 +1376,7 @@ python3 scripts/preview_page.py
 
 Expected: tests pass, previewer prints same output as before, PNGs in `work/` look the same as before.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add sim/renderer.py tests/sim/test_renderer.py scripts/preview_page.py
