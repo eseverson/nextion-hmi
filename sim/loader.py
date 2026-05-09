@@ -112,4 +112,6 @@ def load_hmi(path: str | Path) -> DisplayState:
         )
     if not pages:
         raise ValueError(f"no pages parsed from {path}")
-    return DisplayState(pages=pages)
+    state = DisplayState(pages=pages)
+    state.program_s = getattr(hmi, "programS", "") or ""
+    return state

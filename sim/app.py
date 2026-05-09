@@ -64,10 +64,39 @@ class App:
         self.canvas.bind("<ButtonRelease-1>", self._on_release)
 
         self._register_procs()
-        # Boot: fire codesload on the active page (if any).
-        self._run_event_block(page.events.get("codesload"))
-        self._run_event_block(page.events.get("codesloadend"))
+        # Boot: run Program.s once (sets globals, baud, recmod, calls `page 0`).
+        self._run_program_s()
+        # The Program.s `page 0` may have switched pages; either way fire
+        # codesload of whichever page is now active.
+        active = self.state.active_page
+        self._run_event_block(active.events.get("codesload"))
+        self._run_event_block(active.events.get("codesloadend"))
         self.timer_sched.reset(_now_ms())
+
+    def _run_program_s(self) -> None:
+        """Execute Program.s at boot. This handles `int sys0=0,...`,
+        `baud=...`, `recmod=...`, `printh ...`, `page 0`. Any of those that
+        we don't model is a no-op log.
+
+        Program.s declares ints at module scope; those need to land in
+        `state.sys`, not in a local frame that vanishes after boot. We do
+        that by special-casing names matching `sys0/sys1/sys2`: an
+        `int sys0=0` at boot pre-zeros `state.sys[0]` and is otherwise a
+        no-op. Other locals from Program.s are simply discarded since
+        Nextion has no general module-scope ints.
+        """
+        text = (self.state.program_s or "").strip()
+        if not text:
+            return
+        ctx = ScriptContext(self.state)
+        try:
+            sim_script.run(text, ctx)
+        except Exception:
+            log.exception("Program.s failed")
+        # Promote sys0/sys1/sys2 locals to state.sys so they persist.
+        for name, idx in (("sys0", 0), ("sys1", 1), ("sys2", 2)):
+            if name in ctx.locals:
+                self.state.sys[idx] = int(ctx.locals[name])
 
     # ---------- Event-script execution ----------
 
