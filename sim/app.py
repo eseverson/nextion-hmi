@@ -1,16 +1,35 @@
 from __future__ import annotations
 import logging
+import time
 import tkinter as tk
 from PIL import ImageTk
 
-from sim.state import DisplayState
-from sim.parser import parse
+from sim.state import DisplayState, Page, ScriptContext
+from sim.parser import parse, PageSwitch
 from sim.exec import execute
 from sim.renderer import Renderer
 from sim.transport import Transport, EventEmitter
+from sim.timer import TimerScheduler
+from sim import script as sim_script
+from sim import draw as sim_draw
+from sim.expr import parse as parse_expr, evaluate as eval_expr
+from sim.script import _split_top_level
 
 log = logging.getLogger("sim.app")
 TICK_MS = 33
+
+
+def _now_ms() -> int:
+    return int(time.monotonic() * 1000)
+
+
+def _ev_args(ctx, args_str: str) -> list:
+    """Split args by top-level commas and evaluate each as an expression."""
+    s = args_str.strip()
+    if not s:
+        return []
+    pieces = _split_top_level(s, ",")
+    return [eval_expr(parse_expr(p.strip()), ctx) for p in pieces]
 
 
 class App:
@@ -27,6 +46,7 @@ class App:
         self.renderer = Renderer()
         self.scale = scale
         self.log_commands = log_commands
+        self.timer_sched = TimerScheduler(state)
 
         self.root = tk.Tk()
         self.root.title("Nextion sim")
@@ -39,8 +59,163 @@ class App:
         )
         self.canvas.pack()
         self._tk_image = None
+        self._image_id = None
         self.canvas.bind("<ButtonPress-1>", self._on_press)
         self.canvas.bind("<ButtonRelease-1>", self._on_release)
+
+        self._register_procs()
+        # Boot: fire codesload on the active page (if any).
+        self._run_event_block(page.events.get("codesload"))
+        self._run_event_block(page.events.get("codesloadend"))
+        self.timer_sched.reset(_now_ms())
+
+    # ---------- Event-script execution ----------
+
+    def _run_event_block(self, code: str | None) -> None:
+        if not code or not code.strip():
+            return
+        ctx = ScriptContext(self.state)
+        try:
+            sim_script.run(code, ctx)
+        except Exception:
+            log.exception("event handler failed")
+
+    def _run_component_event(self, comp, name: str) -> None:
+        if comp is None:
+            return
+        self._run_event_block(comp.events.get(name))
+
+    # ---------- Procedure registry (called from scripts) ----------
+
+    def _register_procs(self) -> None:
+        sim_script.register_proc("page", self._proc_page)
+        sim_script.register_proc("ref", lambda ctx, a: None)
+        sim_script.register_proc("vis", self._proc_vis)
+        sim_script.register_proc("tsw", self._proc_tsw)
+        sim_script.register_proc("cls", self._proc_cls)
+        sim_script.register_proc("fill", self._proc_fill)
+        sim_script.register_proc("line", self._proc_line)
+        sim_script.register_proc("cir", self._proc_cir)
+        sim_script.register_proc("cirs", self._proc_cirs)
+        sim_script.register_proc("cle", self._proc_cle)
+        sim_script.register_proc("xstr", self._proc_xstr)
+        sim_script.register_proc("print", self._proc_print)
+        sim_script.register_proc("printh", self._proc_printh)
+        sim_script.register_proc("sendme", lambda ctx, a: None)
+        sim_script.register_proc("get", lambda ctx, a: None)
+
+    def _proc_page(self, ctx, args: str) -> None:
+        target = args.strip()
+        try:
+            tgt_int = int(target)
+            page = self.state.pages_by_id.get(tgt_int)
+        except ValueError:
+            page = self.state.pages.get(target)
+        if page is None:
+            log.warning("page: unknown target %r", target)
+            return
+        self._switch_page(page)
+
+    def _proc_vis(self, ctx, args: str) -> None:
+        # vis <objname>,<v>
+        parts = _split_top_level(args, ",")
+        if len(parts) != 2:
+            return
+        name = parts[0].strip()
+        v = int(eval_expr(parse_expr(parts[1].strip()), ctx))
+        c = self.state.active_page.by_name(name)
+        if c is None:
+            return
+        c.set("vis", v)
+        self.state.dirty = True
+
+    def _proc_tsw(self, ctx, args: str) -> None:
+        # tsw <objname>,<en>
+        parts = _split_top_level(args, ",")
+        if len(parts) != 2:
+            return
+        name = parts[0].strip()
+        v = int(eval_expr(parse_expr(parts[1].strip()), ctx))
+        c = self.state.active_page.by_name(name)
+        if c is None:
+            return
+        c.set("tsw", v)
+
+    def _proc_cls(self, ctx, args: str) -> None:
+        vals = _ev_args(ctx, args)
+        if vals:
+            sim_draw.cls(self.state, int(vals[0]))
+
+    def _proc_fill(self, ctx, args: str) -> None:
+        v = _ev_args(ctx, args)
+        if len(v) >= 5:
+            sim_draw.fill(self.state, int(v[0]), int(v[1]), int(v[2]), int(v[3]), int(v[4]))
+
+    def _proc_line(self, ctx, args: str) -> None:
+        v = _ev_args(ctx, args)
+        if len(v) >= 5:
+            sim_draw.line(self.state, int(v[0]), int(v[1]), int(v[2]), int(v[3]), int(v[4]))
+
+    def _proc_cir(self, ctx, args: str) -> None:
+        v = _ev_args(ctx, args)
+        if len(v) >= 4:
+            sim_draw.cir(self.state, int(v[0]), int(v[1]), int(v[2]), int(v[3]))
+
+    def _proc_cirs(self, ctx, args: str) -> None:
+        v = _ev_args(ctx, args)
+        if len(v) >= 4:
+            sim_draw.cirs(self.state, int(v[0]), int(v[1]), int(v[2]), int(v[3]))
+
+    def _proc_cle(self, ctx, args: str) -> None:
+        v = _ev_args(ctx, args)
+        if len(v) >= 4:
+            sim_draw.cle(self.state, int(v[0]), int(v[1]), int(v[2]), int(v[3]))
+
+    def _proc_xstr(self, ctx, args: str) -> None:
+        # xstr x,y,w,h,font,pco,bco,xcen,ycen,sta,"text"
+        pieces = _split_top_level(args, ",")
+        if len(pieces) < 11:
+            return
+        ints = [int(eval_expr(parse_expr(p.strip()), ctx)) for p in pieces[:10]]
+        text_expr = pieces[10].strip()
+        text_val = eval_expr(parse_expr(text_expr), ctx)
+        sim_draw.xstr(self.state, *ints, str(text_val))
+
+    def _proc_print(self, ctx, args: str) -> None:
+        s = args.strip()
+        try:
+            v = eval_expr(parse_expr(s), ctx)
+            log.info("print: %s", v)
+        except Exception:
+            log.info("print: %s", s)
+
+    def _proc_printh(self, ctx, args: str) -> None:
+        try:
+            payload = bytes(int(p, 16) for p in args.split())
+            log.info("printh: %s", payload.hex())
+        except ValueError:
+            log.info("printh: (invalid) %s", args)
+
+    # ---------- Page switching with events ----------
+
+    def _switch_page(self, target: Page) -> None:
+        if target is self.state.active_page:
+            return
+        old = self.state.active_page
+        self._run_event_block(old.events.get("codesunload"))
+        self.state.set_active(target)
+        # Resize the canvas if the new page has different dimensions.
+        if (target.attrs["w"] != old.attrs["w"]
+                or target.attrs["h"] != old.attrs["h"]):
+            self.canvas.config(
+                width=target.attrs["w"] * self.scale,
+                height=target.attrs["h"] * self.scale,
+            )
+        self._run_event_block(target.events.get("codesload"))
+        self._run_event_block(target.events.get("codesloadend"))
+        self.timer_sched.reset(_now_ms())
+
+    # ---------- Touch handling ----------
 
     def _resolve_click(self, x: int, y: int):
         page = self.state.active_page
@@ -59,20 +234,16 @@ class App:
             return
         page = self.state.active_page
         self.events.touch_press(page.id, c.id)
-        # P0 navigation hack: if Touch Press handler (codesdown) is exactly
-        # `page <n>`, honour it locally so navigation works without the
-        # full script executor that lands in P1.
-        code = (c.events.get("codesdown") or "").strip()
-        if code:
-            lines = [l.strip() for l in code.splitlines() if l.strip()]
-            if len(lines) == 1 and lines[0].startswith("page "):
-                execute(self.state, parse(lines[0].encode("latin-1")))
+        self._run_component_event(c, "codesdown")
 
     def _on_release(self, ev):
         c = self._resolve_click(ev.x, ev.y)
         if c is None:
             return
         self.events.touch_release(self.state.active_page.id, c.id)
+        self._run_component_event(c, "codesup")
+
+    # ---------- Tick loop ----------
 
     def _drain_transport(self) -> None:
         while True:
@@ -81,11 +252,25 @@ class App:
                 return
             if self.log_commands:
                 log.info("RX: %r", frame)
-            execute(self.state, parse(frame))
+            op = parse(frame)
+            # Route page switches through _switch_page so codesload etc. fire.
+            if isinstance(op, PageSwitch):
+                if isinstance(op.target, int):
+                    page = self.state.pages_by_id.get(op.target)
+                else:
+                    page = self.state.pages.get(op.target)
+                if page is not None:
+                    self._switch_page(page)
+                continue
+            execute(self.state, op)
+
+    def _on_timer_fire(self, comp) -> None:
+        self._run_component_event(comp, "codestimer")
 
     def _tick(self) -> None:
         try:
             self._drain_transport()
+            self.timer_sched.tick(_now_ms(), self._on_timer_fire)
             if self.state.dirty:
                 self._redraw()
         except Exception:
@@ -101,7 +286,11 @@ class App:
                 Image.NEAREST,
             )
         self._tk_image = ImageTk.PhotoImage(img)
-        self.canvas.create_image(0, 0, anchor="nw", image=self._tk_image)
+        if self._image_id is None:
+            self._image_id = self.canvas.create_image(
+                0, 0, anchor="nw", image=self._tk_image)
+        else:
+            self.canvas.itemconfig(self._image_id, image=self._tk_image)
 
     def run(self) -> None:
         self._redraw()

@@ -50,6 +50,7 @@ class Page:
     attrs: dict
     components: list[Component]
     overlay: object = None  # PIL.Image.Image or None — lazy per-page draw layer
+    events: dict = field(default_factory=dict)  # codesload / codesloadend / codesunload
 
     def __post_init__(self):
         self._by_name = {c.name: c for c in self.components}

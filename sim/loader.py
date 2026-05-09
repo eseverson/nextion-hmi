@@ -78,6 +78,12 @@ def load_hmi(path: str | Path) -> DisplayState:
             page_id = int(dir_entry.name.split(".", 1)[0])
         except (ValueError, AttributeError):
             page_id = len(pages)
+        # Page-level event scripts (codesload, codesloadend, codesunload) live
+        # alongside "att" in the page-meta component's rawData.
+        page_events = {
+            k: v for k, v in page_comp.rawData.items()
+            if k.startswith("codes") and isinstance(v, str) and v.strip()
+        }
         components: list[Component] = []
         for c in n2t_page.components:
             ca = c.rawData["att"]
@@ -102,6 +108,7 @@ def load_hmi(path: str | Path) -> DisplayState:
             id=page_id,
             attrs=dict(pa),
             components=components,
+            events=page_events,
         )
     if not pages:
         raise ValueError(f"no pages parsed from {path}")
