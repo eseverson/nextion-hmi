@@ -11,9 +11,7 @@ from sim.renderer import Renderer
 from sim.transport import Transport, EventEmitter
 from sim.timer import TimerScheduler
 from sim import script as sim_script
-from sim import draw as sim_draw
-from sim.expr import parse as parse_expr, evaluate as eval_expr
-from sim.script import _split_top_level
+from sim import procs as sim_procs
 
 log = logging.getLogger("sim.app")
 TICK_MS = 33
@@ -21,15 +19,6 @@ TICK_MS = 33
 
 def _now_ms() -> int:
     return int(time.monotonic() * 1000)
-
-
-def _ev_args(ctx, args_str: str) -> list:
-    """Split args by top-level commas and evaluate each as an expression."""
-    s = args_str.strip()
-    if not s:
-        return []
-    pieces = _split_top_level(s, ",")
-    return [eval_expr(parse_expr(p.strip()), ctx) for p in pieces]
 
 
 class App:
@@ -117,113 +106,9 @@ class App:
     # ---------- Procedure registry (called from scripts) ----------
 
     def _register_procs(self) -> None:
-        sim_script.register_proc("page", self._proc_page)
-        sim_script.register_proc("ref", lambda ctx, a: None)
-        sim_script.register_proc("vis", self._proc_vis)
-        sim_script.register_proc("tsw", self._proc_tsw)
-        sim_script.register_proc("cls", self._proc_cls)
-        sim_script.register_proc("fill", self._proc_fill)
-        sim_script.register_proc("line", self._proc_line)
-        sim_script.register_proc("cir", self._proc_cir)
-        sim_script.register_proc("cirs", self._proc_cirs)
-        sim_script.register_proc("cle", self._proc_cle)
-        sim_script.register_proc("xstr", self._proc_xstr)
-        sim_script.register_proc("print", self._proc_print)
-        sim_script.register_proc("printh", self._proc_printh)
-        sim_script.register_proc("sendme", lambda ctx, a: None)
-        sim_script.register_proc("get", lambda ctx, a: None)
-
-    def _proc_page(self, ctx, args: str) -> None:
-        target = args.strip()
-        try:
-            tgt_int = int(target)
-            page = self.state.pages_by_id.get(tgt_int)
-        except ValueError:
-            page = self.state.pages.get(target)
-        if page is None:
-            log.warning("page: unknown target %r", target)
-            return
-        self._switch_page(page)
-
-    def _proc_vis(self, ctx, args: str) -> None:
-        # vis <objname>,<v>
-        parts = _split_top_level(args, ",")
-        if len(parts) != 2:
-            return
-        name = parts[0].strip()
-        v = int(eval_expr(parse_expr(parts[1].strip()), ctx))
-        c = self.state.active_page.by_name(name)
-        if c is None:
-            return
-        c.set("vis", v)
-        self.state.dirty = True
-
-    def _proc_tsw(self, ctx, args: str) -> None:
-        # tsw <objname>,<en>
-        parts = _split_top_level(args, ",")
-        if len(parts) != 2:
-            return
-        name = parts[0].strip()
-        v = int(eval_expr(parse_expr(parts[1].strip()), ctx))
-        c = self.state.active_page.by_name(name)
-        if c is None:
-            return
-        c.set("tsw", v)
-
-    def _proc_cls(self, ctx, args: str) -> None:
-        vals = _ev_args(ctx, args)
-        if vals:
-            sim_draw.cls(self.state, int(vals[0]))
-
-    def _proc_fill(self, ctx, args: str) -> None:
-        v = _ev_args(ctx, args)
-        if len(v) >= 5:
-            sim_draw.fill(self.state, int(v[0]), int(v[1]), int(v[2]), int(v[3]), int(v[4]))
-
-    def _proc_line(self, ctx, args: str) -> None:
-        v = _ev_args(ctx, args)
-        if len(v) >= 5:
-            sim_draw.line(self.state, int(v[0]), int(v[1]), int(v[2]), int(v[3]), int(v[4]))
-
-    def _proc_cir(self, ctx, args: str) -> None:
-        v = _ev_args(ctx, args)
-        if len(v) >= 4:
-            sim_draw.cir(self.state, int(v[0]), int(v[1]), int(v[2]), int(v[3]))
-
-    def _proc_cirs(self, ctx, args: str) -> None:
-        v = _ev_args(ctx, args)
-        if len(v) >= 4:
-            sim_draw.cirs(self.state, int(v[0]), int(v[1]), int(v[2]), int(v[3]))
-
-    def _proc_cle(self, ctx, args: str) -> None:
-        v = _ev_args(ctx, args)
-        if len(v) >= 4:
-            sim_draw.cle(self.state, int(v[0]), int(v[1]), int(v[2]), int(v[3]))
-
-    def _proc_xstr(self, ctx, args: str) -> None:
-        # xstr x,y,w,h,font,pco,bco,xcen,ycen,sta,"text"
-        pieces = _split_top_level(args, ",")
-        if len(pieces) < 11:
-            return
-        ints = [int(eval_expr(parse_expr(p.strip()), ctx)) for p in pieces[:10]]
-        text_expr = pieces[10].strip()
-        text_val = eval_expr(parse_expr(text_expr), ctx)
-        sim_draw.xstr(self.state, *ints, str(text_val))
-
-    def _proc_print(self, ctx, args: str) -> None:
-        s = args.strip()
-        try:
-            v = eval_expr(parse_expr(s), ctx)
-            log.info("print: %s", v)
-        except Exception:
-            log.info("print: %s", s)
-
-    def _proc_printh(self, ctx, args: str) -> None:
-        try:
-            payload = bytes(int(p, 16) for p in args.split())
-            log.info("printh: %s", payload.hex())
-        except ValueError:
-            log.info("printh: (invalid) %s", args)
+        # Procedure handlers live in sim.procs and are shared with HeadlessApp
+        # to keep the surface in lock-step. We're the "host" they close over.
+        sim_procs.register_all(self)
 
     # ---------- Page switching with events ----------
 

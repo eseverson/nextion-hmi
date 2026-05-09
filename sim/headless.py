@@ -21,7 +21,7 @@ from sim.renderer import Renderer
 from sim.transport import Transport
 from sim.timer import TimerScheduler
 from sim import script as sim_script
-from sim.app import App  # for procedure registration via App._register_procs
+from sim import procs as sim_procs
 
 log = logging.getLogger("sim.headless")
 
@@ -45,11 +45,8 @@ class HeadlessApp:
         self.log_commands = log_commands
         self.timer_sched = TimerScheduler(state)
         self._stopped = False
-        # Reuse App's procedure-registration logic without instantiating Tk.
-        # We pass `state` and `transport` to a tiny shim that exposes only
-        # what App's _register_procs / _switch_page need.
-        self._app_shim = _AppShim(self, state, transport)
-        self._app_shim._register_procs()
+        # Same procedure surface as App, registered against `self` as the host.
+        sim_procs.register_all(self)
         # Boot
         self._run_program_s()
         active = state.active_page
@@ -168,67 +165,3 @@ class HeadlessApp:
             self.transport.close()
 
 
-class _AppShim:
-    """Just enough of App's surface for _register_procs to work without Tk."""
-
-    def __init__(self, host: HeadlessApp, state, transport):
-        self.host = host
-        self.state = state
-        self.transport = transport
-        # `events` is needed by some procedures? Actually only _switch_page
-        # touches Tk; everything else uses self.state via the procedure
-        # closures registered by App._register_procs. We delegate.
-
-    def _register_procs(self) -> None:
-        # Reuse App._register_procs by calling it on a temporary App-like
-        # whose attribute access we proxy through. Simpler: just reproduce
-        # the registration here, calling host methods. This avoids Tk.
-        from sim import script as sim_script
-        from sim import draw as sim_draw
-        from sim.expr import parse as parse_expr, evaluate as eval_expr
-        from sim.script import _split_top_level
-
-        host = self.host
-        state = self.state
-
-        def _ev_args(ctx, args_str):
-            s = args_str.strip()
-            if not s:
-                return []
-            return [eval_expr(parse_expr(p.strip()), ctx)
-                    for p in _split_top_level(s, ",")]
-
-        def page_proc(ctx, args):
-            target = args.strip()
-            try:
-                p = state.pages_by_id.get(int(target))
-            except ValueError:
-                p = state.pages.get(target)
-            if p is not None:
-                host._switch_page(p)
-
-        def vis_proc(ctx, args):
-            parts = _split_top_level(args, ",")
-            if len(parts) != 2:
-                return
-            c = state.active_page.by_name(parts[0].strip())
-            if c is None:
-                return
-            v = int(eval_expr(parse_expr(parts[1].strip()), ctx))
-            c.set("vis", v)
-            state.dirty = True
-
-        sim_script.register_proc("page", page_proc)
-        sim_script.register_proc("ref", lambda ctx, a: None)
-        sim_script.register_proc("vis", vis_proc)
-        sim_script.register_proc("tsw", lambda ctx, a: None)
-        sim_script.register_proc("cls", lambda ctx, a: sim_draw.cls(state, int(_ev_args(ctx, a)[0]) if _ev_args(ctx, a) else 0))
-        sim_script.register_proc("fill", lambda ctx, a: sim_draw.fill(state, *[int(v) for v in _ev_args(ctx, a)[:5]]))
-        sim_script.register_proc("line", lambda ctx, a: sim_draw.line(state, *[int(v) for v in _ev_args(ctx, a)[:5]]))
-        sim_script.register_proc("cir", lambda ctx, a: sim_draw.cir(state, *[int(v) for v in _ev_args(ctx, a)[:4]]))
-        sim_script.register_proc("cirs", lambda ctx, a: sim_draw.cirs(state, *[int(v) for v in _ev_args(ctx, a)[:4]]))
-        sim_script.register_proc("cle", lambda ctx, a: sim_draw.cle(state, *[int(v) for v in _ev_args(ctx, a)[:4]]))
-        sim_script.register_proc("print", lambda ctx, a: log.info("print: %s", a))
-        sim_script.register_proc("printh", lambda ctx, a: log.info("printh: %s", a))
-        sim_script.register_proc("sendme", lambda ctx, a: None)
-        sim_script.register_proc("get", lambda ctx, a: None)
