@@ -251,6 +251,12 @@ are now copied into this repo's `findings/` and `scripts/`. Their original
 branches are untouched in the parent repo and can be deleted whenever
 convenient.
 
+## Open research roadmap
+
+A live catalogue of remaining unknowns + queued experiments lives at
+[`findings/G-research-roadmap.md`](findings/G-research-roadmap.md).
+Update it whenever an experiment lands or a new question opens.
+
 ## Suggested follow-ups, ranked
 
 1. **F-series H2 XOR key recovery** — single highest-leverage. Unblocks
