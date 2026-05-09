@@ -14,6 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from sim.app import App  # noqa: E402
+from sim.headless import HeadlessApp  # noqa: E402
 from sim.loader import load_hmi  # noqa: E402
 from sim.transport import (  # noqa: E402
     TcpTransport, PtyTransport, StdinTransport, SerialTransport,
@@ -52,6 +53,9 @@ def main() -> int:
     ap.add_argument("--start-page", default=None)
     ap.add_argument("--log-commands", action="store_true")
     ap.add_argument("--log-level", default="INFO")
+    ap.add_argument("--headless", action="store_true",
+                    help="Run without Tk; render frames to --headless-out.")
+    ap.add_argument("--headless-out", default=str(REPO_ROOT / "work" / "live.png"))
     args = ap.parse_args()
 
     logging.basicConfig(
@@ -63,7 +67,13 @@ def main() -> int:
     if args.start_page and args.start_page in state.pages:
         state.active_page = state.pages[args.start_page]
     transport = _build_transport(args.bind)
-    App(state, transport, scale=args.scale, log_commands=args.log_commands).run()
+    if args.headless:
+        print(f"Headless: rendering to {args.headless_out}", flush=True)
+        HeadlessApp(state, transport, out_path=args.headless_out,
+                    log_commands=args.log_commands).run()
+    else:
+        App(state, transport, scale=args.scale,
+            log_commands=args.log_commands).run()
     return 0
 
 
