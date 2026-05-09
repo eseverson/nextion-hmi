@@ -1,8 +1,39 @@
 from __future__ import annotations
 from pathlib import Path
+import codecs
 import sys
 
 from sim.state import DisplayState, Page, Component
+
+
+_ANSI_CODEC_REGISTERED = False
+
+
+def _ensure_ansi_codec() -> None:
+    """Nextion2Text decodes HMI byte fields as 'ansi'. That alias only exists
+    on Windows; on Linux/macOS it raises LookupError. Resolve it to latin-1
+    so every byte maps to a code point — strict cp1252 has undefined slots
+    that the HMI's binary headers happen to hit, and the text fields we
+    actually care about are ASCII anyway."""
+    global _ANSI_CODEC_REGISTERED
+    try:
+        codecs.lookup("ansi")
+        return
+    except LookupError:
+        pass
+    if _ANSI_CODEC_REGISTERED:
+        return
+
+    fallback = codecs.lookup("latin-1")
+
+    def _search(name: str):
+        if name.lower().replace("-", "_") == "ansi":
+            return fallback
+        return None
+
+    codecs.register(_search)
+    _ANSI_CODEC_REGISTERED = True
+    codecs.lookup("ansi")  # surface any remaining failure now
 
 
 def _ensure_nextion2text_on_path() -> None:
@@ -18,12 +49,13 @@ def _ensure_nextion2text_on_path() -> None:
 
 def load_hmi(path: str | Path) -> DisplayState:
     """Load a Nextion HMI file and return a populated DisplayState."""
+    _ensure_ansi_codec()
     _ensure_nextion2text_on_path()
     from Nextion2Text import HMI
 
     hmi = HMI(str(path))
     pages: dict[str, Page] = {}
-    for n2t_page in hmi.pages:
+    for page_index, n2t_page in enumerate(hmi.pages):
         page_comp = next(
             (c for c in n2t_page.components if c.rawData["att"].get("type") == 121),
             None,
@@ -51,9 +83,12 @@ def load_hmi(path: str | Path) -> DisplayState:
                     events=events,
                 )
             )
+        # The page-meta component's "id" is always 0 in the HMI; the real
+        # page id (used by `page <n>` commands at runtime) is the page's
+        # position in the HMI page list.
         pages[page_name] = Page(
             name=page_name,
-            id=pa.get("id") or 0,
+            id=page_index,
             attrs=dict(pa),
             components=components,
         )
