@@ -245,6 +245,16 @@ class Renderer:
             # with c.rawData["att"]. Build a tiny shim.
             shim = type("Shim", (), {"rawData": {"att": c.attrs}})()
             render_component(draw, shim, bg)
+        # Composite the per-page draw overlay (filled by `fill`/`xstr`/etc.
+        # primitives invoked from event scripts). Nextion paints these on
+        # top of static components.
+        overlay = getattr(page, "overlay", None)
+        if overlay is not None:
+            if overlay.mode != "RGBA":
+                overlay = overlay.convert("RGBA")
+            img = img.convert("RGBA")
+            img.alpha_composite(overlay)
+            img = img.convert("RGB")
         # Apply dim
         dim = max(0, min(100, getattr(state, "dim", 100)))
         if dim < 100:
