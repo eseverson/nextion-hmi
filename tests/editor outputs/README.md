@@ -61,8 +61,6 @@ pair and produces a single combined report.
 |---|------|-------|--------|
 | 00 | baseline | none | reference |
 | 01 | orientation_flip | rotate 180° | H1↔H2 propagation, F-series XOR key |
-| 02 | dim_default | change initial backlight | small H1 numeric field |
-| 03 | baud_change | change project baud rate | H1 vs Program.s split |
 | 04 | red_val_deadbeef | one Variable's val → 0xDEADBEEF | Variable layout in page payload, page CRC |
 | 05 | text_qqqqqqqq | one Text's `txt` → `QQQQQQQQ` | known plaintext for body scanning |
 | 06 | bco_magenta | one component bco → 0xF81F | colour encoding location |
@@ -71,5 +69,10 @@ pair and produces a single combined report.
 | 09 | program_s_page1 | Program.s `page 0` → `page 1` | Program.s storage format |
 | 10 | timer_extra_line | add one assignment line to main's Timer event | event-script payload growth |
 | 11 | add_page | add an empty page | top-level directory growth |
-| 12 | save_no_change | open + save, no change | save determinism / timestamp leakage |
-| 13 | save_six_times | save → close → open → save → ... | filesystem-image hypothesis (Path A) |
+| 13 | save_six_times | save → close → open → save → ... | hash/counter pattern at usercode+0x715f4/0x71634 |
+
+**Already resolved** by batch 1 ([`findings/H-experiment-batch-1.md`](../../findings/H-experiment-batch-1.md)):
+
+- ~~02 dim_default~~ — covered by `dim 66.*`
+- ~~03 baud_change~~ — covered by `230400 baud.*`
+- ~~12 save_no_change~~ — covered by save A/C/D comparison

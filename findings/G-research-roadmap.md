@@ -100,25 +100,27 @@ what files are present in each folder.
 
 | # | Name | Status |
 |---|------|--------|
-| 00 | `baseline` | `[ ]` empty — drop a clean save here first |
-| 01 | `orientation_flip` | `[ ]` |
-| 02 | `dim_default` | `[ ]` (data exists at top-level; copy in here) |
-| 03 | `baud_change` | `[ ]` (data exists at top-level; copy in here) |
-| 04 | `red_val_deadbeef` | `[ ]` |
-| 05 | `text_qqqqqqqq` | `[ ]` |
-| 06 | `bco_magenta` | `[ ]` |
-| 07 | `add_hotspot` | `[ ]` |
-| 08 | `delete_component` | `[ ]` |
-| 09 | `program_s_page1` | `[ ]` |
-| 10 | `timer_extra_line` | `[ ]` |
-| 11 | `add_page` | `[ ]` |
-| 12 | `save_no_change` | `[ ]` |
-| 13 | `save_six_times` | `[ ]` (partial data at top-level) |
-| 14 | _new: sleep_timeout_ | `[~]` data at top-level (`sleep 30.*`) |
+| 00 | `baseline` | `[~]` user dropped baseline; awaiting full pair |
+| 01 | `orientation_flip` | `[~]` user populated; analysed via top-level `vertical.*` ([F4](H-experiment-batch-1.md)). Re-run against a clean baseline to nail T1. |
+| 04 | `red_val_deadbeef` | `[ ]` cracks H1 (page CRC) + H11 (Variable val location) |
+| 05 | `text_qqqqqqqq` | `[ ]` cracks H12 (Text txt storage) |
+| 06 | `bco_magenta` | `[ ]` cracks H10 (bco position) + H19 (coordinate encoding) |
+| 07 | `add_hotspot` | `[ ]` cracks H9 (component overhead) |
+| 08 | `delete_component` | `[ ]` cracks H6 (compaction) + H15 (tombstones) |
+| 09 | `program_s_page1` | `[ ]` cracks H5 (Program.s blob CRC) |
+| 10 | `timer_extra_line` | `[ ]` deeper bytecode encoding |
+| 11 | `add_page` | `[ ]` cracks H2, H3, H13, H14 |
+| 13 | `save_six_times` | `[ ]` cracks H17 (4-byte hash) + H18 (counter pattern) |
 | 15 | _future: add Picture component_ | `[ ]` would crack T5's `pic` opcode |
 | 16 | _future: add a `for` loop in a script_ | `[ ]` cracks T6 |
 | 17 | _future: change project file version field_ | `[ ]` if editable |
 | 18 | _future: project name change_ | `[ ]` to find where the project name is stored |
+
+**Removed** (redundant — fully resolved by batch 1):
+
+- ~~`02_dim_default`~~ — covered by `dim 66.*` ([F1, F3](H-experiment-batch-1.md))
+- ~~`03_baud_change`~~ — covered by `230400 baud.*` ([F5, F6](H-experiment-batch-1.md))
+- ~~`12_save_no_change`~~ — covered by `save A`/`save C`/`save D` comparison ([F2](H-experiment-batch-1.md))
 
 ## 6. Sim feature gaps (what the simulator doesn't yet model)
 
@@ -207,3 +209,4 @@ Append a dated entry every time something here changes status.
 | 2026-05-09 | Roadmap created. Scoped 16 HMI unknowns, 8 TFT unknowns, 3 ZI unknowns, ~20 sim command gaps. 14 numbered experiments queued; user dropped 7 ad-hoc experiments at top level. |
 | 2026-05-09 | Batch 1 analysed (`save A` as baseline). 6 findings landed in [`H-experiment-batch-1.md`](H-experiment-batch-1.md): H8 fully resolved (saves leak 5 bytes per save in fixed offsets), T9 resolved (H1+0x3c = file_size), T1 partly progressed (H2 is deterministic from H1). 3 new unknowns surfaced: H17, H18, H19. |
 | 2026-05-09 | Findings F1–F6 documented + `findings/H-experiment-batch-1.md` committed alongside roadmap update. |
+| 2026-05-09 | Cleanup: removed `02_dim_default`, `03_baud_change`, `12_save_no_change` experiment folders — fully resolved by batch 1. Open queue down from 14 to 11. |
