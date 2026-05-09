@@ -130,18 +130,33 @@ class App:
                 font=("monospace", 10, "bold"), anchor="w",
             )
 
-        hdr(panel, "STATE").pack(fill=tk.X, pady=(0, 2))
+        # Pack order matters: pack STATE at the top first, RECENT at the
+        # bottom (which grabs the bottom space regardless of window size),
+        # then COMPONENTS gets whatever's left.
+        hdr(panel, "STATE").pack(side=tk.TOP, fill=tk.X, pady=(0, 2))
         self._state_text = tk.Text(
             panel, height=8, bg="#1e1e1e", fg="#dcdcdc",
             font=("monospace", 9), relief=tk.FLAT, padx=4, pady=2,
             wrap=tk.NONE,
         )
-        self._state_text.pack(fill=tk.X)
+        self._state_text.pack(side=tk.TOP, fill=tk.X)
         self._state_text.config(state=tk.DISABLED)
 
-        hdr(panel, "COMPONENTS").pack(fill=tk.X, pady=(8, 2))
+        # RECENT — bottom of panel, fixed height. Pack BEFORE components
+        # so it claims the bottom strip even on short windows.
+        self._log_text = tk.Text(
+            panel, height=LOG_LINES, bg="#1e1e1e", fg="#9cdcfe",
+            font=("monospace", 9), relief=tk.FLAT, padx=4, pady=2,
+            wrap=tk.NONE,
+        )
+        self._log_text.pack(side=tk.BOTTOM, fill=tk.X)
+        self._log_text.config(state=tk.DISABLED)
+        hdr(panel, "RECENT").pack(side=tk.BOTTOM, fill=tk.X, pady=(8, 2))
+
+        # COMPONENTS — middle, takes whatever's left.
+        hdr(panel, "COMPONENTS").pack(side=tk.TOP, fill=tk.X, pady=(8, 2))
         comp_frame = tk.Frame(panel, bg="#252526")
-        comp_frame.pack(fill=tk.BOTH, expand=True)
+        comp_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self._comp_text = tk.Text(
             comp_frame, bg="#1e1e1e", fg="#dcdcdc",
             font=("monospace", 9), relief=tk.FLAT, padx=4, pady=2,
@@ -152,15 +167,6 @@ class App:
         comp_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self._comp_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self._comp_text.config(state=tk.DISABLED)
-
-        hdr(panel, "RECENT").pack(fill=tk.X, pady=(8, 2))
-        self._log_text = tk.Text(
-            panel, height=LOG_LINES, bg="#1e1e1e", fg="#9cdcfe",
-            font=("monospace", 9), relief=tk.FLAT, padx=4, pady=2,
-            wrap=tk.NONE,
-        )
-        self._log_text.pack(fill=tk.X)
-        self._log_text.config(state=tk.DISABLED)
         # Tags for direction colouring
         self._log_text.tag_configure("rx", foreground="#dcdcaa")
         self._log_text.tag_configure("tx", foreground="#9cdcfe")
