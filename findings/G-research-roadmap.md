@@ -35,7 +35,7 @@ Keep entries short. Status legend:
 | H5 | Page CRC for non-page entries (`Program.s`, `*.zi`, `main.HMI`) — they have a leading u32 too | `09_program_s_page1` produces a 1-byte payload diff; try same CRC algorithm hunt | `[ ]` |
 | H6 | Whether the editor compacts the data area on save | `13_save_six_times` + `08_delete_component` — does data area ever shrink? | `[ ]` |
 | H7 | The "PageHeader+0x15 / +0x17" `?` bytes (consistently non-zero, varying per page) | Compare `*.pa` payloads across our 4 existing pages — partially analysable from baseline alone | `[ ]` |
-| H8 | Whether saves leak ephemeral state (timestamps, save counters) | `12_save_no_change` — diff two no-op saves | `[ ]` |
+| H8 | Whether saves leak ephemeral state (timestamps, save counters) | `12_save_no_change` — diff two no-op saves | `[x]` Resolved by [F2](H-experiment-batch-1.md): 5 bytes total per save (4-byte hash at usercode+0x715f4 + 1-byte counter at +0x71634). |
 | H9 | Component attribute record layout — minimum overhead per component | `07_add_hotspot` — diff baseline vs +1 Hotspot | `[ ]` |
 | H10 | Per-component `bco`/`pco` byte position inside attribute record | `06_bco_magenta` — distinctive 0xF81F is grep-able | `[ ]` |
 | H11 | Per-Variable `val` byte position inside attribute record | `04_red_val_deadbeef` — distinctive 0xDEADBEEF is grep-able | `[ ]` |
@@ -44,13 +44,17 @@ Keep entries short. Status legend:
 | H14 | Sentinel meaning when adding a page (does `main.HMI` resource manifest grow?) | `11_add_page` | `[ ]` |
 | H15 | Tombstone retention policy (always all? capped? FIFO?) | `13_save_six_times` | `[ ]` |
 | H16 | Editor version field bytes (where in H1?) | Open the project in a different editor version and re-save — out of scope unless multiple editors available | `[!]` |
+| H17 | What encodes at usercode+0x715f4 (4 bytes that change every save)? | Diff per-save outputs vs known-changing inputs (timestamp? RNG?). `13_save_six_times` will show whether the value monotonically changes or is random. | `[ ]` (new from F2) |
+| H18 | What encodes at usercode+0x71634 (1-byte save counter)? | `13_save_six_times` should confirm linear increment per save. | `[ ]` (new from F2) |
+| H19 | Page coordinate encoding (orientation flip rotates *literals*) | `06_bco_magenta` + `07_add_hotspot` — distinctive bbox values | `[ ]` (new from F4) |
 
 ## 2. TFT format unknowns
 
 | # | Unknown | How to crack | Status |
 |---|---------|-------------|--------|
-| T1 | F-series H2 XOR key (TFTTool placeholder = 0; H2 is clearly encrypted) | `01_orientation_flip` should change a single H1 field — diff & XOR H2 regions to expose the key pattern. Pair with `02_dim_default` for cross-validation. | `[ ]` |
+| T1 | F-series H2 XOR key (TFTTool placeholder = 0; H2 is clearly encrypted) | `01_orientation_flip` should change a single H1 field — diff & XOR H2 regions to expose the key pattern. Pair with `02_dim_default` for cross-validation. | `[~]` Partly progressed by [F3 + F6](H-experiment-batch-1.md): H2 is deterministic from H1. When H1 is byte-identical, H2 is byte-identical; when H1 changes the same way, H2 changes the same way. The "key" is whatever maps H1 → H2 deltas. |
 | T2 | The 128-byte H2 region at H2+0x44..H2+0xC4 that TFTTool wipes to 0xFF on save | After T1 lands (key known), decrypt this region and inspect | `[ ]` blocked on T1 |
+| T9 | Field at H1+0x3c (formerly listed as "H1+0x37..0x47 ressources_files_*") | Diff multiple experiments where file size grows | `[x]` Resolved by [F1](H-experiment-batch-1.md): H1+0x3c is `file_size` u32 LE. Updates by exactly the file growth on every save. |
 | T3 | Tail file CRC LSB XOR derivation (`raw[0x03] ^ raw[0x2e] ^ raw[0x3c]`) — already known per Path B; cross-validate on a deliberately-modified file | Any of the experiments where tail CRC is non-trivial | `[x]` per Path B |
 | T4 | Resource-directory's third u32 ("reserved" per Path D) — what is it? | Compare resource directories across baseline + experiments that change resource counts (none of the queued experiments touch resources directly) | `[ ]` |
 | T5 | Bytecode for unused opcodes (`pic`, `xpic`, `picq`, `xstr`, `crcputh`, `qrcode`, `tswS`, `lcd_dev`, …) | Each requires a specific feature in the project. `15_pic_component` and friends would be future experiments. | `[ ]` |
@@ -73,13 +77,13 @@ numbered subfolders). Files use `<descriptor>.HMI/.tft` naming.
 
 | File | Maps to | Status |
 |------|---------|--------|
-| `vertical.HMI/.tft` | `01_orientation_flip` (vertical flip) | `[~]` analyse |
-| `dim 66.HMI/.tft` | `02_dim_default` (backlight 66%) | `[~]` analyse |
-| `230400 baud.HMI/.tft` | `03_baud_change` (115200 → 230400) | `[~]` analyse |
-| `sleep 30.HMI/.tft` | NEW: sleep-timeout 30s — unmodelled experiment, valuable | `[~]` analyse |
-| `save A.HMI/.tft` | `13_save_six_times` (iter 1) | `[~]` analyse |
-| `save C.HMI/.tft` | `13_save_six_times` (iter 2 or 3) | `[~]` analyse |
-| `save D.HMI/.tft` | `13_save_six_times` (iter 3 or 4) | `[~]` analyse |
+| `vertical.HMI/.tft` | `01_orientation_flip` (vertical flip) | `[x]` analysed → [F4](H-experiment-batch-1.md): orientation rebakes coords |
+| `dim 66.HMI/.tft` | `02_dim_default` (backlight 66%) | `[x]` analysed → [F1, F3](H-experiment-batch-1.md) |
+| `230400 baud.HMI/.tft` | `03_baud_change` (115200 → 230400) | `[x]` analysed → [F5, F6](H-experiment-batch-1.md): 2-byte change only |
+| `sleep 30.HMI/.tft` | NEW: sleep-timeout 30s — unmodelled experiment, valuable | `[x]` analysed → same H1/H2 footprint as `dim 66` (F1, F3) |
+| `save A.HMI/.tft` | de-facto baseline used for batch 1 | `[x]` |
+| `save C.HMI/.tft` | save-determinism iter | `[x]` analysed → [F2](H-experiment-batch-1.md): 5-byte ephemeral state per save |
+| `save D.HMI/.tft` | save-determinism iter | `[x]` analysed → [F2](H-experiment-batch-1.md) |
 | `sim 66.HMI` (no .tft) | unclear; missing TFT | `[!]` need .tft to diff |
 
 **Action:** run `scripts/diff_hmi.py` and `scripts/diff_tft.py --xor-h2`
@@ -201,3 +205,5 @@ Append a dated entry every time something here changes status.
 | Date | What happened |
 |------|---------------|
 | 2026-05-09 | Roadmap created. Scoped 16 HMI unknowns, 8 TFT unknowns, 3 ZI unknowns, ~20 sim command gaps. 14 numbered experiments queued; user dropped 7 ad-hoc experiments at top level. |
+| 2026-05-09 | Batch 1 analysed (`save A` as baseline). 6 findings landed in [`H-experiment-batch-1.md`](H-experiment-batch-1.md): H8 fully resolved (saves leak 5 bytes per save in fixed offsets), T9 resolved (H1+0x3c = file_size), T1 partly progressed (H2 is deterministic from H1). 3 new unknowns surfaced: H17, H18, H19. |
+| 2026-05-09 | Findings F1–F6 documented + `findings/H-experiment-batch-1.md` committed alongside roadmap update. |
