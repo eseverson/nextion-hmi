@@ -12,6 +12,7 @@ from sim.parser import (
     IntLiteral,
     StrLiteral,
     AttrRef,
+    ExprValue,
 )
 
 
@@ -80,4 +81,45 @@ def test_unrecognised_returns_unsupported():
 
 def test_empty_frame_is_unsupported():
     op = parse(b"")
+    assert isinstance(op, Unsupported)
+
+
+def test_attribute_set_with_expression_rhs():
+    op = parse(b"s0.bco=red.val+1")
+    assert isinstance(op, Mutation)
+    assert op.target == "s0" and op.attr == "bco"
+    assert isinstance(op.value, ExprValue)
+
+
+def test_global_set_with_expression_rhs():
+    op = parse(b"dim=h0.val")
+    assert isinstance(op, GlobalSet)
+    assert op.name == "dim"
+    # Simple `obj.attr` parses as AttrRef; exec evaluates it the same way.
+    assert isinstance(op.value, (AttrRef, ExprValue))
+
+
+def test_global_set_with_arithmetic_expression():
+    op = parse(b"dim=h0.val+5")
+    assert isinstance(op, GlobalSet)
+    assert op.name == "dim"
+    assert isinstance(op.value, ExprValue)
+
+
+def test_attribute_set_with_sysvar_expression():
+    op = parse(b"x0.val=sys0+5")
+    assert isinstance(op, Mutation)
+    assert op.target == "x0" and op.attr == "val"
+    assert isinstance(op.value, ExprValue)
+
+
+def test_string_concat_expression():
+    op = parse(b's0.txt="hello"+"world"')
+    assert isinstance(op, Mutation)
+    assert op.target == "s0" and op.attr == "txt"
+    assert isinstance(op.value, ExprValue)
+
+
+def test_malformed_rhs_returns_unsupported():
+    op = parse(b"x0.val=1+")
     assert isinstance(op, Unsupported)

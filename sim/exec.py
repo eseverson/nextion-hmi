@@ -2,11 +2,12 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from sim.state import DisplayState, ComponentRef
+from sim.state import DisplayState, ComponentRef, ScriptContext
 from sim.parser import (
     Operation, Mutation, PageSwitch, GlobalSet, Refresh, ClearScreen,
-    Print, PrintH, Unsupported, IntLiteral, StrLiteral, AttrRef,
+    Print, PrintH, Unsupported, IntLiteral, StrLiteral, AttrRef, ExprValue,
 )
+from sim.expr import evaluate as eval_expr
 
 log = logging.getLogger("sim.exec")
 
@@ -21,6 +22,15 @@ def _resolve_value(state: DisplayState, value):
         if v is None:
             log.warning("unresolved reference %s.%s", value.obj, value.attr)
         return v
+    if isinstance(value, ExprValue):
+        # TCP-driven mutations have no script-local scope; build a fresh
+        # ScriptContext so the expression can read sys vars / component
+        # attrs the same way scripts do.
+        try:
+            return eval_expr(value.node, ScriptContext(state))
+        except Exception:
+            log.exception("failed to evaluate RHS expression")
+            return None
     return None
 
 
@@ -49,8 +59,15 @@ def execute(state: DisplayState, op: Operation) -> None:
         return
 
     if isinstance(op, GlobalSet):
+        if isinstance(op.value, (AttrRef, ExprValue)):
+            v = _resolve_value(state, op.value)
+            if v is None:
+                return
+            value = int(v)
+        else:
+            value = op.value
         if op.name in ("dim", "dims"):
-            state.dim = max(0, min(100, op.value))
+            state.dim = max(0, min(100, value))
             state.dirty = True
         # baud / recmod / thup / usup: acknowledged, no-op
         return

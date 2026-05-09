@@ -58,3 +58,44 @@ def test_unsupported_op_logs(hmi_path, caplog):
     state = load_hmi(hmi_path)
     execute(state, parse(b"sys0=x7.val-x4.val"))
     assert any("expression" in r.message or "Unsupported" in r.message for r in caplog.records)
+
+
+def test_expr_rhs_arithmetic_with_attr_ref(hmi_path):
+    state = load_hmi(hmi_path)
+    red_val = state.pages["main"].by_name("red").attrs["val"]
+    execute(state, parse(b"s0.bco=red.val+1"))
+    assert state.pages["main"].by_name("s0").attrs["bco"] == red_val + 1
+    assert state.dirty
+
+
+def test_expr_rhs_for_global_dim(hmi_path):
+    state = load_hmi(hmi_path)
+    # h0 lives on the settings page; set its val first to a known value.
+    h0 = state.pages["settings"].by_name("h0")
+    h0.attrs["val"] = 42
+    execute(state, parse(b"dim=h0.val"))
+    assert state.dim == 42
+    assert state.dirty
+
+
+def test_expr_rhs_uses_sysvar(hmi_path):
+    state = load_hmi(hmi_path)
+    state.sys[0] = 10
+    execute(state, parse(b"x0.val=sys0+5"))
+    assert state.pages["main"].by_name("x0").attrs["val"] == 15
+
+
+def test_expr_rhs_string_concat(hmi_path):
+    state = load_hmi(hmi_path)
+    execute(state, parse(b's0.txt="hello"+"world"'))
+    assert state.pages["main"].by_name("s0").attrs["txt"] == "helloworld"
+    assert state.dirty
+
+
+def test_expr_rhs_malformed_returns_unsupported(hmi_path, caplog):
+    state = load_hmi(hmi_path)
+    op = parse(b"x0.val=1+")
+    from sim.parser import Unsupported
+    assert isinstance(op, Unsupported)
+    execute(state, op)
+    assert any("Unsupported" in r.message for r in caplog.records)

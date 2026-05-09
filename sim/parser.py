@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from typing import Union
 import re
 
+from sim import expr as _expr
+
 
 @dataclass(frozen=True)
 class IntLiteral:
@@ -20,7 +22,13 @@ class AttrRef:
     attr: str
 
 
-Value = Union[IntLiteral, StrLiteral, AttrRef]
+@dataclass(frozen=True)
+class ExprValue:
+    """RHS expression that needs evaluation against a ScriptContext."""
+    node: object  # sim.expr.Expr
+
+
+Value = Union[IntLiteral, StrLiteral, AttrRef, ExprValue]
 
 
 @dataclass(frozen=True)
@@ -38,7 +46,7 @@ class PageSwitch:
 @dataclass(frozen=True)
 class GlobalSet:
     name: str
-    value: int
+    value: object  # int or ExprValue
 
 
 @dataclass(frozen=True)
@@ -165,15 +173,14 @@ def parse(frame: bytes) -> Operation:
         lhs, _, rhs = text.partition("=")
         lhs = lhs.strip()
         rhs = rhs.strip()
-        # Reject expressions containing operators outside string literals
-        if not rhs.startswith('"'):
-            for op in ("+", "-", "*", "/", "<", ">", "&&", "||"):
-                # Allow leading minus on a numeric
-                if op == "-" and _INT_RE.fullmatch(rhs):
-                    continue
-                if op in rhs:
-                    return Unsupported(text, "expression unsupported in P0")
+        # Try simple literal/attr-ref first, else fall back to a parsed
+        # expression AST. Empty RHS is still invalid.
         v = _parse_value(rhs)
+        if v is None and rhs:
+            try:
+                v = ExprValue(_expr.parse(rhs))
+            except Exception:
+                return Unsupported(text, "parse: bad value")
         if v is None:
             return Unsupported(text, "parse: bad value")
         if "." in lhs:
@@ -184,6 +191,8 @@ def parse(frame: bytes) -> Operation:
         if lhs in _GLOBAL_NAMES:
             if isinstance(v, IntLiteral):
                 return GlobalSet(lhs, v.value)
+            if isinstance(v, (AttrRef, ExprValue)):
+                return GlobalSet(lhs, v)
             return Unsupported(text, "global: expected int")
         return Unsupported(text, "parse: bare identifier lhs")
 
