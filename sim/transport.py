@@ -169,6 +169,83 @@ class PtyTransport(Transport):
                 pass
 
 
+class SerialTransport(Transport):
+    """Open an existing serial device (e.g. /dev/ttyUSB0) and frame.
+
+    Useful for hardware-in-the-loop testing: wire your MCU's UART to a
+    USB-serial adapter on the host, point the sim at the adapter, and the
+    firmware drives the sim as if it were a real Nextion.
+
+    Sets baud rate via termios. Sets 8N1 raw mode. Falls back to
+    whatever-the-OS-gave-us if termios calls fail (e.g. on devices that
+    don't support TCSANOW).
+    """
+
+    _BAUD_MAP = {
+        2400: 0o000013, 4800: 0o000014, 9600: 0o000015, 19200: 0o000016,
+        38400: 0o000017, 57600: 0o010001, 115200: 0o010002,
+        230400: 0o010003, 460800: 0o010004, 921600: 0o010007,
+    }
+
+    def __init__(self, path: str, baud: int = 115200):
+        super().__init__()
+        self.path = path
+        self.baud = baud
+        self._fd = os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+        try:
+            self._configure_termios()
+        except Exception:
+            # Best-effort. Many "serial" devices (PTYs, sockets-as-tty)
+            # don't fully implement termios; the byte stream still works.
+            pass
+
+    def _configure_termios(self) -> None:
+        import termios
+        attrs = termios.tcgetattr(self._fd)
+        iflag, oflag, cflag, lflag, ispeed, ospeed, cc = attrs
+        # 8N1 raw mode
+        cflag &= ~(termios.PARENB | termios.CSTOPB | termios.CSIZE)
+        cflag |= termios.CS8 | termios.CREAD | termios.CLOCAL
+        iflag &= ~(termios.IXON | termios.IXOFF | termios.IXANY
+                   | termios.IGNBRK | termios.BRKINT | termios.PARMRK
+                   | termios.ISTRIP | termios.INLCR | termios.IGNCR | termios.ICRNL)
+        oflag &= ~termios.OPOST
+        lflag &= ~(termios.ECHO | termios.ECHONL | termios.ICANON
+                   | termios.ISIG | termios.IEXTEN)
+        speed = self._BAUD_MAP.get(self.baud)
+        if speed is None:
+            # Fall back to a constant by name lookup, e.g. termios.B115200.
+            attr_name = f"B{self.baud}"
+            speed = getattr(termios, attr_name, termios.B115200)
+        ispeed = ospeed = speed
+        termios.tcsetattr(
+            self._fd, termios.TCSANOW,
+            [iflag, oflag, cflag, lflag, ispeed, ospeed, cc],
+        )
+
+    def _pump_into_buffer(self) -> None:
+        r, _, _ = select.select([self._fd], [], [], 0)
+        if r:
+            try:
+                chunk = os.read(self._fd, 4096)
+                if chunk:
+                    self._buf.extend(chunk)
+            except (OSError, BlockingIOError):
+                pass
+
+    def _write_raw(self, payload: bytes) -> None:
+        try:
+            os.write(self._fd, payload)
+        except OSError:
+            pass
+
+    def close(self) -> None:
+        try:
+            os.close(self._fd)
+        except OSError:
+            pass
+
+
 class EventEmitter:
     """Constructs Nextion event byte sequences and sends them via a Transport."""
 

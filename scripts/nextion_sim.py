@@ -15,7 +15,9 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from sim.app import App  # noqa: E402
 from sim.loader import load_hmi  # noqa: E402
-from sim.transport import TcpTransport, PtyTransport, StdinTransport  # noqa: E402
+from sim.transport import (  # noqa: E402
+    TcpTransport, PtyTransport, StdinTransport, SerialTransport,
+)
 
 
 def _build_transport(spec: str):
@@ -31,6 +33,13 @@ def _build_transport(spec: str):
         t = TcpTransport(host=host, port=int(port))
         t.start()
         print(f"Listening on tcp://{host}:{t.port}", flush=True)
+        return t
+    if spec.startswith("serial:"):
+        rest = spec[len("serial:"):]
+        path, _, baud = rest.partition(":")
+        baud_int = int(baud) if baud else 115200
+        t = SerialTransport(path=path, baud=baud_int)
+        print(f"Serial: {path} @ {baud_int} 8N1", flush=True)
         return t
     raise SystemExit(f"unknown --bind: {spec}")
 
