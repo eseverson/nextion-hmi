@@ -49,11 +49,15 @@ Each path's findings live in `findings/<path>-*.md`. The synthesis lives in
 - [MMMZZZZ/Nextion2Text](https://github.com/MMMZZZZ/Nextion2Text) — read-only HMI dump
 - [hagronnestad/nextion-font-editor](https://github.com/hagronnestad/nextion-font-editor) — ZI fonts (full read+write for v3, partial v5/v6)
 
-## Live simulator (P0)
+## Live simulator (P0 + P1)
 
 Linux process that renders the dashboard and accepts the same
 `\xff\xff\xff`-framed serial commands the firmware sends. Pluggable transport
-(TCP / PTY / stdin), Tk window, click-to-touch event emission.
+(TCP / PTY / stdin), Tk window, click-to-touch event emission. **P1 adds**
+expression evaluation, `if`/`while`/`for`, event-handler execution, drawing
+primitives, and the `sys0/sys1/sys2` + `dp` system variables. The Timer
+event on the main page now fires automatically — the per-XFloat warning
+colours flip on threshold without the firmware sending those writes.
 
 ```bash
 # Start the simulator (listens on tcp://127.0.0.1:9999 by default).
@@ -71,10 +75,12 @@ printf 'x0.val=12345\xff\xff\xff' | ncat --send-only 127.0.0.1 9999
 code at (open it as a regular tty). `--bind stdin` reads commands from
 stdin — useful for scripted tests.
 
-P0 covers the runtime command subset the miata-dash firmware actually
-uses: `<obj>.<attr>=<value>`, `page <id|name>`, `dim=`, `dims=`,
-`baud=`, `recmod=`, `cls`, `print`, `printh`, `ref`. Expression
-evaluation, control flow, and event-handler execution land in P1.
+Supported runtime command surface (TCP / PTY / stdin):
+`<obj>.<attr>=<expr>` (with full expression RHS), `<sys|dim>=<expr>`,
+`page <id|name>` (fires `codesload`/`codesunload`), `cls`, `fill`, `line`,
+`cir`, `cirs`, `cle`, `xstr`, `vis`, `tsw`, `print`, `printh`, `ref`.
+Event handlers from the HMI run in real time: page load/unload, component
+press/release, and Timer events. `Program.s` runs once at boot.
 
-Tests: `pytest tests/sim/` (42 currently). Design + plan:
-`docs/specs/2026-05-09-nextion-simulator-{design,plan}.md`.
+Tests: `pytest tests/sim/` (116 passing). Design + plans:
+`docs/specs/2026-05-09-nextion-simulator-{design,plan,p1-plan}.md`.
