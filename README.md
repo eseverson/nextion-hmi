@@ -48,3 +48,31 @@ Each path's findings live in `findings/<path>-*.md`. The synthesis lives in
 - [UNUF/nxt-doc](https://github.com/UNUF/nxt-doc) — format docs (TFT mostly, HMI/ZI TBD)
 - [MMMZZZZ/Nextion2Text](https://github.com/MMMZZZZ/Nextion2Text) — read-only HMI dump
 - [hagronnestad/nextion-font-editor](https://github.com/hagronnestad/nextion-font-editor) — ZI fonts (full read+write for v3, partial v5/v6)
+
+## Live simulator (P0)
+
+Linux process that renders the dashboard and accepts the same
+`\xff\xff\xff`-framed serial commands the firmware sends. Pluggable transport
+(TCP / PTY / stdin), Tk window, click-to-touch event emission.
+
+```bash
+# Start the simulator (listens on tcp://127.0.0.1:9999 by default).
+python3 scripts/nextion_sim.py
+
+# In another terminal:
+printf 'x0.val=12345\xff\xff\xff' | nc -N 127.0.0.1 9999
+printf 's0.txt="MAP Error"\xff\xff\xff' | nc -N 127.0.0.1 9999
+printf 'page settings\xff\xff\xff' | nc -N 127.0.0.1 9999
+```
+
+`--bind pty` creates a `/dev/pts/N` path you can point real serial-using
+code at (open it as a regular tty). `--bind stdin` reads commands from
+stdin — useful for scripted tests.
+
+P0 covers the runtime command subset the miata-dash firmware actually
+uses: `<obj>.<attr>=<value>`, `page <id|name>`, `dim=`, `dims=`,
+`baud=`, `recmod=`, `cls`, `print`, `printh`, `ref`. Expression
+evaluation, control flow, and event-handler execution land in P1.
+
+Tests: `pytest tests/sim/` (42 currently). Design + plan:
+`docs/specs/2026-05-09-nextion-simulator-{design,plan}.md`.
