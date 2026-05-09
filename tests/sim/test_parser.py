@@ -74,9 +74,10 @@ def test_printh_bytes():
 
 
 def test_unrecognised_returns_unsupported():
-    op = parse(b"sys0=x7.val-x4.val")
+    # P1 made `sys0=x7.val-x4.val` a valid GlobalSet. Use a genuinely
+    # malformed input that isn't an assignment, page/ref/cls/print/printh.
+    op = parse(b"this is not a command")
     assert isinstance(op, Unsupported)
-    assert "expression" in op.reason or "parse" in op.reason
 
 
 def test_empty_frame_is_unsupported():

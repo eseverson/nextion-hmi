@@ -69,6 +69,12 @@ def execute(state: DisplayState, op: Operation) -> None:
         if op.name in ("dim", "dims"):
             state.dim = max(0, min(100, value))
             state.dirty = True
+        elif op.name == "sys0":
+            state.sys[0] = int(value)
+        elif op.name == "sys1":
+            state.sys[1] = int(value)
+        elif op.name == "sys2":
+            state.sys[2] = int(value)
         # baud / recmod / thup / usup: acknowledged, no-op
         return
 

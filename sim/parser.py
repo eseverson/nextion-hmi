@@ -81,7 +81,8 @@ Operation = Union[
 ]
 
 
-_GLOBAL_NAMES = {"dim", "dims", "baud", "recmod", "thup", "usup"}
+_GLOBAL_NAMES = {"dim", "dims", "baud", "recmod", "thup", "usup",
+                 "sys0", "sys1", "sys2"}
 _IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _INT_RE = re.compile(r"-?\d+")
 

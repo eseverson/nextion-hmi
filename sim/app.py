@@ -293,8 +293,8 @@ class App:
                 continue
             execute(self.state, op)
 
-    def _on_timer_fire(self, comp) -> None:
-        self._run_component_event(comp, "codestimer")
+    def _on_timer_fire(self, comp, event_name: str) -> None:
+        self._run_component_event(comp, event_name)
 
     def _tick(self) -> None:
         try:

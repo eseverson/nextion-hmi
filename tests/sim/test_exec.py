@@ -56,8 +56,9 @@ def test_unknown_component_logs_no_crash(hmi_path, caplog):
 
 def test_unsupported_op_logs(hmi_path, caplog):
     state = load_hmi(hmi_path)
-    execute(state, parse(b"sys0=x7.val-x4.val"))
-    assert any("expression" in r.message or "Unsupported" in r.message for r in caplog.records)
+    # P1 accepts expression RHS; use truly malformed input.
+    execute(state, parse(b"this is not a command"))
+    assert any("Unsupported" in r.message for r in caplog.records)
 
 
 def test_expr_rhs_arithmetic_with_attr_ref(hmi_path):
