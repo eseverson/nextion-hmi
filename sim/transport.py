@@ -1,0 +1,182 @@
+# sim/transport.py
+from __future__ import annotations
+import os
+import select
+import socket
+import sys
+import threading
+from typing import Optional
+
+
+_TERMINATOR = b"\xff\xff\xff"
+
+
+class Transport:
+    """Base framer; subclasses provide bytes I/O."""
+
+    def __init__(self):
+        self._buf = bytearray()
+        self._lock = threading.Lock()
+
+    # ---- Framing ----
+    def _next_frame_from_buffer(self) -> Optional[bytes]:
+        idx = self._buf.find(_TERMINATOR)
+        if idx == -1:
+            return None
+        frame = bytes(self._buf[:idx])
+        del self._buf[: idx + len(_TERMINATOR)]
+        return frame
+
+    def recv_frame(self) -> Optional[bytes]:
+        with self._lock:
+            self._pump_into_buffer()
+            return self._next_frame_from_buffer()
+
+    def _pump_into_buffer(self) -> None:
+        """Subclass hook: read any available bytes into self._buf without blocking."""
+        pass
+
+    def _write_raw(self, payload: bytes) -> None:
+        raise NotImplementedError
+
+    def send_frame(self, payload: bytes) -> None:
+        self._write_raw(payload + _TERMINATOR)
+
+    def close(self) -> None:
+        pass
+
+
+class TcpTransport(Transport):
+    def __init__(self, host: str = "127.0.0.1", port: int = 9999):
+        super().__init__()
+        self._host = host
+        self._port_requested = port
+        self._server: Optional[socket.socket] = None
+        self._client: Optional[socket.socket] = None
+        self._accept_thread: Optional[threading.Thread] = None
+        self._stop = threading.Event()
+        self.port = port
+
+    def start(self) -> None:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind((self._host, self._port_requested))
+        s.listen(1)
+        s.settimeout(0.1)
+        self._server = s
+        self.port = s.getsockname()[1]
+        self._accept_thread = threading.Thread(target=self._accept_loop, daemon=True)
+        self._accept_thread.start()
+
+    def _accept_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                conn, _ = self._server.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            conn.setblocking(False)
+            with self._lock:
+                if self._client is not None:
+                    self._client.close()
+                self._client = conn
+
+    def _pump_into_buffer(self) -> None:
+        c = self._client
+        if c is None:
+            return
+        try:
+            while True:
+                chunk = c.recv(4096)
+                if not chunk:
+                    self._client = None
+                    return
+                self._buf.extend(chunk)
+        except BlockingIOError:
+            return
+        except (ConnectionResetError, OSError):
+            self._client = None
+
+    def _write_raw(self, payload: bytes) -> None:
+        with self._lock:
+            c = self._client
+            if c is None:
+                return
+            try:
+                c.sendall(payload)
+            except OSError:
+                self._client = None
+
+    def close(self) -> None:
+        self._stop.set()
+        if self._client is not None:
+            try:
+                self._client.close()
+            except OSError:
+                pass
+        if self._server is not None:
+            try:
+                self._server.close()
+            except OSError:
+                pass
+
+
+class StdinTransport(Transport):
+    def __init__(self):
+        super().__init__()
+        self._fd = sys.stdin.fileno()
+
+    def _pump_into_buffer(self) -> None:
+        r, _, _ = select.select([self._fd], [], [], 0)
+        if r:
+            chunk = os.read(self._fd, 4096)
+            if chunk:
+                self._buf.extend(chunk)
+
+    def _write_raw(self, payload: bytes) -> None:
+        sys.stdout.buffer.write(payload)
+        sys.stdout.buffer.flush()
+
+
+class PtyTransport(Transport):
+    def __init__(self):
+        super().__init__()
+        self._master, self._slave = os.openpty()
+        self.path = os.ttyname(self._slave)
+
+    def _pump_into_buffer(self) -> None:
+        r, _, _ = select.select([self._master], [], [], 0)
+        if r:
+            try:
+                chunk = os.read(self._master, 4096)
+                if chunk:
+                    self._buf.extend(chunk)
+            except OSError:
+                pass
+
+    def _write_raw(self, payload: bytes) -> None:
+        try:
+            os.write(self._master, payload)
+        except OSError:
+            pass
+
+    def close(self) -> None:
+        for fd in (self._master, self._slave):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+class EventEmitter:
+    """Constructs Nextion event byte sequences and sends them via a Transport."""
+
+    def __init__(self, transport):
+        self._t = transport
+
+    def touch_press(self, page_id: int, comp_id: int) -> None:
+        self._t.send_frame(bytes([0x65, page_id & 0xFF, comp_id & 0xFF, 0x01]))
+
+    def touch_release(self, page_id: int, comp_id: int) -> None:
+        self._t.send_frame(bytes([0x65, page_id & 0xFF, comp_id & 0xFF, 0x00]))
