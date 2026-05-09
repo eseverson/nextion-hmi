@@ -47,12 +47,20 @@ class Transport:
 
 
 class TcpTransport(Transport):
+    """Multi-client TCP server.
+
+    Accepts any number of concurrent connections. recv merges bytes from
+    all clients into the same framing buffer. send broadcasts events to
+    every connected client (so a firmware client and a debug observer can
+    both watch). Dead connections are reaped silently.
+    """
+
     def __init__(self, host: str = "127.0.0.1", port: int = 9999):
         super().__init__()
         self._host = host
         self._port_requested = port
         self._server: Optional[socket.socket] = None
-        self._client: Optional[socket.socket] = None
+        self._clients: set[socket.socket] = set()
         self._accept_thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self.port = port
@@ -61,7 +69,7 @@ class TcpTransport(Transport):
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind((self._host, self._port_requested))
-        s.listen(1)
+        s.listen(8)
         s.settimeout(0.1)
         self._server = s
         self.port = s.getsockname()[1]
@@ -78,43 +86,58 @@ class TcpTransport(Transport):
                 return
             conn.setblocking(False)
             with self._lock:
-                if self._client is not None:
-                    self._client.close()
-                self._client = conn
+                self._clients.add(conn)
 
     def _pump_into_buffer(self) -> None:
-        c = self._client
-        if c is None:
-            return
-        try:
-            while True:
-                chunk = c.recv(4096)
-                if not chunk:
-                    self._client = None
-                    return
-                self._buf.extend(chunk)
-        except BlockingIOError:
-            return
-        except (ConnectionResetError, OSError):
-            self._client = None
+        # NOTE: caller (recv_frame) already holds self._lock. Do NOT reacquire.
+        # _accept_loop also takes the lock, so iteration over _clients is safe
+        # because while we hold the lock, the accept thread is blocked.
+        clients = list(self._clients)
+        dead: list[socket.socket] = []
+        for c in clients:
+            try:
+                while True:
+                    chunk = c.recv(4096)
+                    if not chunk:
+                        dead.append(c)
+                        break
+                    self._buf.extend(chunk)
+            except BlockingIOError:
+                continue
+            except (ConnectionResetError, OSError):
+                dead.append(c)
+        for c in dead:
+            self._clients.discard(c)
+            try:
+                c.close()
+            except OSError:
+                pass
 
     def _write_raw(self, payload: bytes) -> None:
         with self._lock:
-            c = self._client
-            if c is None:
-                return
-            try:
-                c.sendall(payload)
-            except OSError:
-                self._client = None
+            clients = list(self._clients)
+            dead: list[socket.socket] = []
+            for c in clients:
+                try:
+                    c.sendall(payload)
+                except OSError:
+                    dead.append(c)
+            for c in dead:
+                self._clients.discard(c)
+                try:
+                    c.close()
+                except OSError:
+                    pass
 
     def close(self) -> None:
         self._stop.set()
-        if self._client is not None:
-            try:
-                self._client.close()
-            except OSError:
-                pass
+        with self._lock:
+            for c in list(self._clients):
+                try:
+                    c.close()
+                except OSError:
+                    pass
+            self._clients.clear()
         if self._server is not None:
             try:
                 self._server.close()

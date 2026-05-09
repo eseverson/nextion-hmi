@@ -63,6 +63,37 @@ def test_tcp_transport_round_trip():
         t.close()
 
 
+def test_tcp_multi_client_broadcast():
+    """Two clients connected; an event sent by the sim must reach both."""
+    t = TcpTransport(host="127.0.0.1", port=0)
+    t.start()
+    try:
+        a = socket.create_connection(("127.0.0.1", t.port))
+        b = socket.create_connection(("127.0.0.1", t.port))
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline and len(t._clients) < 2:
+            time.sleep(0.01)
+        assert len(t._clients) == 2
+        a.sendall(b"a.val=1\xff\xff\xff")
+        b.sendall(b"b.val=2\xff\xff\xff")
+        deadline = time.monotonic() + 1.0
+        frames = set()
+        while time.monotonic() < deadline and len(frames) < 2:
+            f = t.recv_frame()
+            if f is not None:
+                frames.add(f)
+            else:
+                time.sleep(0.01)
+        assert frames == {b"a.val=1", b"b.val=2"}
+        t.send_frame(b"\x65\x00\x15\x01")
+        a.settimeout(1.0); b.settimeout(1.0)
+        assert a.recv(64) == b"\x65\x00\x15\x01\xff\xff\xff"
+        assert b.recv(64) == b"\x65\x00\x15\x01\xff\xff\xff"
+        a.close(); b.close()
+    finally:
+        t.close()
+
+
 def test_event_emitter_touch_press():
     sent = []
 
