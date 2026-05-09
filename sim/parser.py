@@ -75,9 +75,21 @@ class Unsupported:
     reason: str
 
 
+@dataclass(frozen=True)
+class TouchInject:
+    """Sim-only extension: scripted touch input from outside the process.
+
+    `target` is a component name (str) or component id (int) on the active
+    page. `action` is "press", "release", or "click" (= press immediately
+    followed by release).
+    """
+    target: object  # str or int
+    action: str     # "press" | "release" | "click"
+
+
 Operation = Union[
     Mutation, PageSwitch, GlobalSet, Refresh,
-    ClearScreen, Print, PrintH, Unsupported,
+    ClearScreen, Print, PrintH, TouchInject, Unsupported,
 ]
 
 
@@ -127,6 +139,25 @@ def parse(frame: bytes) -> Operation:
     text = frame.decode("latin-1").strip()
     if not text:
         return Unsupported(text, "empty frame")
+
+    # `touch <target> [press|release|click]` — sim-only injection.
+    # Default action is `click` (press + release).
+    if text.startswith("touch "):
+        rest = text[len("touch "):].strip().split()
+        if not rest:
+            return Unsupported(text, "touch: missing target")
+        target_s = rest[0]
+        action = rest[1].lower() if len(rest) > 1 else "click"
+        if action not in ("press", "release", "click"):
+            return Unsupported(text, f"touch: bad action {action!r}")
+        target: object
+        if _INT_RE.fullmatch(target_s):
+            target = int(target_s)
+        elif _IDENT_RE.fullmatch(target_s):
+            target = target_s
+        else:
+            return Unsupported(text, f"touch: bad target {target_s!r}")
+        return TouchInject(target, action)
 
     # `print "..."`
     if text.startswith("print ") and not text.startswith("printh"):

@@ -5,7 +5,7 @@ import tkinter as tk
 from PIL import ImageTk
 
 from sim.state import DisplayState, Page, ScriptContext
-from sim.parser import parse, PageSwitch
+from sim.parser import parse, PageSwitch, TouchInject
 from sim.exec import execute
 from sim.renderer import Renderer
 from sim.transport import Transport, EventEmitter
@@ -274,6 +274,27 @@ class App:
 
     # ---------- Tick loop ----------
 
+    def _resolve_touch_target(self, target):
+        page = self.state.active_page
+        if isinstance(target, int):
+            return page.by_id(target)
+        return page.by_name(target)
+
+    def _inject_touch(self, action: str, target) -> None:
+        c = self._resolve_touch_target(target)
+        if c is None:
+            log.warning("touch: unknown component %r on page %s", target, self.state.active_page.name)
+            return
+        if action in ("press", "click"):
+            self.events.touch_press(self.state.active_page.id, c.id)
+            self._run_component_event(c, "codesdown")
+        if action in ("release", "click"):
+            # For 'click', emit release on the same active page (which may
+            # have changed if codesdown did `page N`). That matches what a
+            # real user sees when they touch+release fast on a hotspot.
+            self.events.touch_release(self.state.active_page.id, c.id)
+            self._run_component_event(c, "codesup")
+
     def _drain_transport(self) -> None:
         while True:
             frame = self.transport.recv_frame()
@@ -290,6 +311,9 @@ class App:
                     page = self.state.pages.get(op.target)
                 if page is not None:
                     self._switch_page(page)
+                continue
+            if isinstance(op, TouchInject):
+                self._inject_touch(op.action, op.target)
                 continue
             execute(self.state, op)
 

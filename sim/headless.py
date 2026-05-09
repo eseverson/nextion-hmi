@@ -15,7 +15,7 @@ from pathlib import Path
 from PIL import Image
 
 from sim.state import DisplayState, ScriptContext
-from sim.parser import parse, PageSwitch
+from sim.parser import parse, PageSwitch, TouchInject
 from sim.exec import execute
 from sim.renderer import Renderer
 from sim.transport import Transport
@@ -101,6 +101,17 @@ class HeadlessApp:
     def _on_timer_fire(self, comp, event_name: str) -> None:
         self._run_component_event(comp, event_name)
 
+    def _inject_touch(self, action: str, target) -> None:
+        page = self.state.active_page
+        c = page.by_id(target) if isinstance(target, int) else page.by_name(target)
+        if c is None:
+            log.warning("touch: unknown component %r on page %s", target, page.name)
+            return
+        if action in ("press", "click"):
+            self._run_component_event(c, "codesdown")
+        if action in ("release", "click"):
+            self._run_component_event(c, "codesup")
+
     def _drain(self) -> None:
         while True:
             frame = self.transport.recv_frame()
@@ -115,6 +126,9 @@ class HeadlessApp:
                           else self.state.pages.get(op.target))
                 if target is not None:
                     self._switch_page(target)
+                continue
+            if isinstance(op, TouchInject):
+                self._inject_touch(op.action, op.target)
                 continue
             execute(self.state, op)
 
