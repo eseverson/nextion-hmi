@@ -262,9 +262,13 @@ convenient.
    test if/when ready to leave static-analysis-only mode.
 3. **Tombstone history extractor** — surface the recoverable previous
    saves in a `.HMI` as a real feature. Useful for anyone who lost work.
-4. **Procedural page replay** — partial Nextion VM that walks user-code
-   `page N` routines into a Linux framebuffer. Yields page previews even
-   for fully-procedural projects like this one.
+4. ~~**Procedural page replay**~~ — **delivered as Path E.** Implemented as
+   static-attribute rendering rather than VM execution; turned out to be
+   sufficient for this project because the HMI describes everything as
+   components. Renders 4/4 pages. Sample output:
+   `findings/E-preview-main.png`. See `findings/E-procedural-preview.md`.
+   A real VM would still be needed for projects that draw entirely from
+   user-code `fill`/`xstr` calls (none here).
 5. **Upstream contributions to nxt-doc / TFTTool** — file an issue/PR with
    (a) the HMI directory spec from Path A, (b) the resource directory
    spec from Path D, (c) the `nxt-1.67.1` instruction-set entry from
