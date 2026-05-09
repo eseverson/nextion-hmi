@@ -295,27 +295,34 @@ class App:
             self.events.touch_release(self.state.active_page.id, c.id)
             self._run_component_event(c, "codesup")
 
+    def handle_frame(self, frame: bytes) -> None:
+        """Apply a single command frame as if it had arrived over transport.
+
+        Public so introspection / HTTP control planes can inject commands
+        without poking transport internals.
+        """
+        if self.log_commands:
+            log.info("RX: %r", frame)
+        op = parse(frame)
+        if isinstance(op, PageSwitch):
+            if isinstance(op.target, int):
+                page = self.state.pages_by_id.get(op.target)
+            else:
+                page = self.state.pages.get(op.target)
+            if page is not None:
+                self._switch_page(page)
+            return
+        if isinstance(op, TouchInject):
+            self._inject_touch(op.action, op.target)
+            return
+        execute(self.state, op)
+
     def _drain_transport(self) -> None:
         while True:
             frame = self.transport.recv_frame()
             if frame is None:
                 return
-            if self.log_commands:
-                log.info("RX: %r", frame)
-            op = parse(frame)
-            # Route page switches through _switch_page so codesload etc. fire.
-            if isinstance(op, PageSwitch):
-                if isinstance(op.target, int):
-                    page = self.state.pages_by_id.get(op.target)
-                else:
-                    page = self.state.pages.get(op.target)
-                if page is not None:
-                    self._switch_page(page)
-                continue
-            if isinstance(op, TouchInject):
-                self._inject_touch(op.action, op.target)
-                continue
-            execute(self.state, op)
+            self.handle_frame(frame)
 
     def _on_timer_fire(self, comp, event_name: str) -> None:
         self._run_component_event(comp, event_name)

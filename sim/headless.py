@@ -112,25 +112,29 @@ class HeadlessApp:
         if action in ("release", "click"):
             self._run_component_event(c, "codesup")
 
+    def handle_frame(self, frame: bytes) -> None:
+        """Apply a single command frame; mirror of App.handle_frame."""
+        if self.log_commands:
+            log.info("RX: %r", frame)
+        op = parse(frame)
+        if isinstance(op, PageSwitch):
+            target = (self.state.pages_by_id.get(op.target)
+                      if isinstance(op.target, int)
+                      else self.state.pages.get(op.target))
+            if target is not None:
+                self._switch_page(target)
+            return
+        if isinstance(op, TouchInject):
+            self._inject_touch(op.action, op.target)
+            return
+        execute(self.state, op)
+
     def _drain(self) -> None:
         while True:
             frame = self.transport.recv_frame()
             if frame is None:
                 return
-            if self.log_commands:
-                log.info("RX: %r", frame)
-            op = parse(frame)
-            if isinstance(op, PageSwitch):
-                target = (self.state.pages_by_id.get(op.target)
-                          if isinstance(op.target, int)
-                          else self.state.pages.get(op.target))
-                if target is not None:
-                    self._switch_page(target)
-                continue
-            if isinstance(op, TouchInject):
-                self._inject_touch(op.action, op.target)
-                continue
-            execute(self.state, op)
+            self.handle_frame(frame)
 
     def _redraw(self) -> None:
         img = self.renderer.render(self.state)

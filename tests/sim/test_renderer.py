@@ -20,6 +20,19 @@ def test_renderer_respects_dim(hmi_path):
     assert avg_dim < avg_full * 0.6
 
 
+def test_renderer_skips_components_with_vis_zero(hmi_path):
+    state = load_hmi(hmi_path)
+    main = state.pages["main"]
+    base = Renderer().render(state)
+    # Hide one of the XFloat readouts and re-render
+    main.by_name("x0").set("vis", 0)
+    state.dirty = True
+    after = Renderer().render(state)
+    assert base.size == after.size
+    # The renders should differ — x0's region is now page-bg-coloured.
+    assert list(base.getdata()) != list(after.getdata())
+
+
 def test_renderer_composites_overlay(hmi_path):
     """A red rect drawn into the page overlay must show up in the final render."""
     state = load_hmi(hmi_path)

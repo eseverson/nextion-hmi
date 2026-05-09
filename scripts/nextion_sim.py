@@ -15,6 +15,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from sim.app import App  # noqa: E402
 from sim.headless import HeadlessApp  # noqa: E402
+from sim.http import IntrospectionServer  # noqa: E402
 from sim.loader import load_hmi  # noqa: E402
 from sim.transport import (  # noqa: E402
     TcpTransport, PtyTransport, StdinTransport, SerialTransport,
@@ -56,6 +57,8 @@ def main() -> int:
     ap.add_argument("--headless", action="store_true",
                     help="Run without Tk; render frames to --headless-out.")
     ap.add_argument("--headless-out", default=str(REPO_ROOT / "work" / "live.png"))
+    ap.add_argument("--http", type=int, default=None, metavar="PORT",
+                    help="Also start an HTTP introspection/control server on PORT.")
     args = ap.parse_args()
 
     logging.basicConfig(
@@ -69,11 +72,16 @@ def main() -> int:
     transport = _build_transport(args.bind)
     if args.headless:
         print(f"Headless: rendering to {args.headless_out}", flush=True)
-        HeadlessApp(state, transport, out_path=args.headless_out,
-                    log_commands=args.log_commands).run()
+        app = HeadlessApp(state, transport, out_path=args.headless_out,
+                          log_commands=args.log_commands)
     else:
-        App(state, transport, scale=args.scale,
-            log_commands=args.log_commands).run()
+        app = App(state, transport, scale=args.scale,
+                  log_commands=args.log_commands)
+    if args.http is not None:
+        srv = IntrospectionServer(app, port=args.http)
+        srv.start()
+        print(f"Introspection: http://127.0.0.1:{srv.port}/", flush=True)
+    app.run()
     return 0
 
 

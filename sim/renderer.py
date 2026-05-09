@@ -136,6 +136,10 @@ def render_component(draw: ImageDraw.ImageDraw, c, page_bg):
     t = a.get("type")
     if t in INVISIBLE_TYPES:
         return
+    # Honor the runtime `vis` attribute. Defaults to 1 (visible) for
+    # components that don't have it set.
+    if a.get("vis", 1) == 0:
+        return
     x = a.get("x", 0)
     y = a.get("y", 0)
     w = a.get("w", 0)
