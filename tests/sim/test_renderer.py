@@ -46,3 +46,62 @@ def test_renderer_composites_overlay(hmi_path):
     assert px[0] > 200 and px[1] < 60 and px[2] < 60, f"expected red, got {px}"
     # And outside the rect, the pixel should match the base render.
     assert base.getpixel((10, 10)) == after.getpixel((10, 10))
+
+
+def test_renderer_uses_zi_glyphs_when_available(hmi_path):
+    """The 'RPM' label on the main page should be rendered with the project's
+    actual ZI font (font 0). We assert by inspecting the t1 component's box
+    and checking that ink pixels appear in the component's pco color, sized
+    to the ZI font's height (24 px) — not the heuristic Liberation Mono
+    point size (~70% of comp height ~21pt rasterised)."""
+    state = load_hmi(hmi_path)
+    assert 0 in state.fonts, "ZI font 0 must be loaded for this assertion"
+    img = Renderer().render(state)
+    main = state.pages["main"]
+    t1 = main.by_name("t1")
+    assert t1.attrs.get("txt") == "RPM"
+    # The t1 component box; gather pixels in pco colour inside it.
+    bx, by = t1.attrs["x"], t1.attrs["y"]
+    bw, bh = t1.attrs["w"], t1.attrs["h"]
+    pco = t1.attrs.get("pco")
+    assert pco is not None
+    # Convert the RGB565 pco to RGB888 (matches renderer's mapping).
+    r = ((pco >> 11) & 0x1F) * 255 // 31
+    g = ((pco >> 5) & 0x3F) * 255 // 63
+    b = (pco & 0x1F) * 255 // 31
+    target = (r, g, b)
+    found_target = 0
+    for x in range(bx, bx + bw):
+        for y in range(by, by + bh):
+            if img.getpixel((x, y)) == target:
+                found_target += 1
+    # ZI rendering pastes solid pco wherever the alpha mask is fully opaque,
+    # so we expect a substantial number of exactly-matching pixels.
+    assert found_target > 50, f"expected real glyph ink in t1 box, found {found_target}"
+    # And the ink should be vertically constrained to roughly the font height
+    # (24 px), not spread across the full 30 px box.
+    inked_rows = set()
+    for x in range(bx, bx + bw):
+        for y in range(by, by + bh):
+            if img.getpixel((x, y)) == target:
+                inked_rows.add(y)
+    if inked_rows:
+        span = max(inked_rows) - min(inked_rows) + 1
+        assert span <= state.fonts[0].height, (
+            f"ink spans {span}px, expected <= ZI font height {state.fonts[0].height}px"
+        )
+
+
+def test_renderer_falls_back_to_ttf_when_font_missing(hmi_path):
+    """If a component references a font_id we don't have, the renderer must
+    not crash — it falls back to the TTF substitute path."""
+    state = load_hmi(hmi_path)
+    # Force the t1 label to use a non-existent font id.
+    main = state.pages["main"]
+    t1 = main.by_name("t1")
+    t1.attrs["font"] = 99
+    # And also clear the fonts dict to simulate "ZI fonts unavailable".
+    state.fonts = {}
+    img = Renderer().render(state)
+    main_attrs = state.pages["main"].attrs
+    assert img.size == (main_attrs["w"], main_attrs["h"])

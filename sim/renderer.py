@@ -8,6 +8,8 @@ import os
 
 from PIL import Image, ImageDraw, ImageFont
 
+from sim.font import ZiFont
+
 
 # Component type IDs (subset; matches Nextion2Text.Component.attributes["type"]["mapping"])
 T_PAGE = 121
@@ -106,6 +108,59 @@ def align_text(draw: ImageDraw.ImageDraw, text: str, font, box, xcen, ycen,
     draw.text((tx, ty), text, font=font, fill=fill)
 
 
+def _zi_text_width(font: ZiFont, codepoints: list[int]) -> int:
+    """Total advance width for a sequence of font codepoints."""
+    return sum(font.glyph_width(cp) or font.width or 0 for cp in codepoints)
+
+
+def draw_zi_text(
+    img: Image.Image,
+    text: str,
+    font: ZiFont,
+    box: tuple[int, int, int, int],
+    xcen: int,
+    ycen: int,
+    fill: tuple[int, int, int],
+) -> None:
+    """Render `text` glyph-by-glyph onto `img` using the ZI bitmap font.
+
+    Each glyph's L-mode mask is colorised with `fill` and pasted at
+    integer pixel coordinates. The component's box is used for alignment.
+    Text that overflows the box is allowed to spill — Nextion firmware
+    behaves the same.
+    """
+    x, y, w, h = box
+    cps = font.encode_text(text)
+    tw = _zi_text_width(font, cps)
+    th = font.height
+    if xcen == 1:
+        tx = x + (w - tw) // 2
+    elif xcen == 2:
+        tx = x + w - tw
+    else:
+        tx = x
+    if ycen == 1:
+        ty = y + (h - th) // 2
+    elif ycen == 2:
+        ty = y + h - th
+    else:
+        ty = y
+    # Solid-color L-mode -> RGBA with the component's pco. We composite
+    # each glyph individually so anti-aliased pixels blend with the bg.
+    cursor = tx
+    for cp in cps:
+        gw = font.glyph_width(cp) or font.width or 0
+        if gw <= 0:
+            continue
+        mask = font.glyph_image(cp)
+        # Build a coloured patch the same size as the mask, then paste using
+        # the mask as alpha. img is RGB so we go through the L mask directly.
+        # Pillow's `paste(color, box, mask)` accepts an L-mode mask.
+        img.paste(fill, (cursor, ty, cursor + mask.size[0], ty + mask.size[1]),
+                  mask)
+        cursor += gw
+
+
 def format_xfloat(val: int, vvs0: int, vvs1: int) -> str:
     """Format an XFloat. vvs0 = padding/leading-zero count, vvs1 = decimals.
 
@@ -131,7 +186,30 @@ def format_xfloat(val: int, vvs0: int, vvs1: int) -> str:
     return s
 
 
-def render_component(draw: ImageDraw.ImageDraw, c, page_bg):
+def _draw_text(
+    img: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    font_id,
+    fonts: dict,
+    box: tuple[int, int, int, int],
+    xcen: int,
+    ycen: int,
+    fill,
+) -> None:
+    """Render `text` using the ZI font for `font_id` if available, else the TTF substitute."""
+    zi = fonts.get(font_id) if isinstance(font_id, int) else None
+    if zi is not None:
+        draw_zi_text(img, text, zi, box, xcen, ycen, fill)
+        return
+    _, _, _, h = box
+    font_pt = font_size_for(font_id, h)
+    ttf = load_font(font_pt)
+    align_text(draw, text, ttf, box, xcen, ycen, fill)
+
+
+def render_component(img: Image.Image, draw: ImageDraw.ImageDraw, c, page_bg, fonts: dict | None = None):
+    fonts = fonts or {}
     a = c.rawData["att"]
     t = a.get("type")
     if t in INVISIBLE_TYPES:
@@ -169,9 +247,7 @@ def render_component(draw: ImageDraw.ImageDraw, c, page_bg):
 
     if t == T_TEXT or t == T_SCROLLING_TEXT:
         txt = a.get("txt", "") or ""
-        font_pt = font_size_for(a.get("font"), h)
-        font = load_font(font_pt)
-        align_text(draw, txt, font, (x, y, w, h),
+        _draw_text(img, draw, txt, a.get("font"), fonts, (x, y, w, h),
                    a.get("xcen", 1), a.get("ycen", 1), pco)
         return
 
@@ -181,17 +257,13 @@ def render_component(draw: ImageDraw.ImageDraw, c, page_bg):
             s = format_xfloat(val, a.get("vvs0", 0) or 0, a.get("vvs1", 0) or 0)
         else:
             s = str(val)
-        font_pt = font_size_for(a.get("font"), h)
-        font = load_font(font_pt)
-        align_text(draw, s, font, (x, y, w, h),
+        _draw_text(img, draw, s, a.get("font"), fonts, (x, y, w, h),
                    a.get("xcen", 1), a.get("ycen", 1), pco)
         return
 
     if t == T_BUTTON:
         txt = a.get("txt", "") or ""
-        font_pt = font_size_for(a.get("font"), h)
-        font = load_font(font_pt)
-        align_text(draw, txt, font, (x, y, w, h),
+        _draw_text(img, draw, txt, a.get("font"), fonts, (x, y, w, h),
                    a.get("xcen", 1), a.get("ycen", 1), pco)
         return
 
@@ -243,12 +315,13 @@ class Renderer:
             bg = (255, 255, 255)
         img = Image.new("RGB", (w, h), bg)
         draw = ImageDraw.Draw(img)
+        fonts = getattr(state, "fonts", {}) or {}
         # Render in id order (matches Nextion paint order)
         for c in sorted(page.components, key=lambda c: c.attrs.get("id", 0)):
             # Adapt: render_component expects a Nextion2Text-style component
             # with c.rawData["att"]. Build a tiny shim.
             shim = type("Shim", (), {"rawData": {"att": c.attrs}})()
-            render_component(draw, shim, bg)
+            render_component(img, draw, shim, bg, fonts)
         # Composite the per-page draw overlay (filled by `fill`/`xstr`/etc.
         # primitives invoked from event scripts). Nextion paints these on
         # top of static components.

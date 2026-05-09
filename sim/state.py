@@ -75,6 +75,10 @@ class DisplayState:
     sys: list[int] = field(default_factory=lambda: [0, 0, 0])
     # P1: program-script lines (Program.s), parsed lazily by app boot
     program_s: str = ""
+    # ZI fonts pulled out of the HMI, keyed by font id (the integer prefix
+    # of the .zi filename — e.g. `0.zi` => 0). Empty when fonts couldn't be
+    # parsed; renderer falls back to a TTF substitute in that case.
+    fonts: dict = field(default_factory=dict)
 
     def __post_init__(self):
         self.pages_by_id = {p.id: p for p in self.pages.values()}

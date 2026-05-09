@@ -4,6 +4,7 @@ import codecs
 import sys
 
 from sim.state import DisplayState, Page, Component
+from sim.font import parse_zi, ZiFont
 
 
 _ANSI_CODEC_REGISTERED = False
@@ -114,4 +115,23 @@ def load_hmi(path: str | Path) -> DisplayState:
         raise ValueError(f"no pages parsed from {path}")
     state = DisplayState(pages=pages)
     state.program_s = getattr(hmi, "programS", "") or ""
+
+    # Pull each ZI font directory entry out of the HMI raw bytes. Keyed by
+    # the integer prefix of the .zi filename — `0.zi` -> 0 — which matches
+    # the `font` attribute on Text/XFloat/Number components.
+    for entry in hmi.header.content:
+        name = entry.name
+        if not name.endswith(".zi"):
+            continue
+        try:
+            font_id = int(name.split(".", 1)[0])
+        except ValueError:
+            continue
+        blob = hmi.raw[entry.start:entry.start + entry.size]
+        try:
+            state.fonts[font_id] = parse_zi(blob)
+        except Exception:
+            # Unsupported / malformed font → leave it absent; renderer will
+            # use the TTF fallback for this font_id.
+            continue
     return state

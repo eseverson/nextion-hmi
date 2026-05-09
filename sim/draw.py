@@ -86,14 +86,23 @@ def xstr(state: DisplayState, x: int, y: int, w: int, h: int,
          font_id: int, pco: int, bco: int, xcen: int, ycen: int,
          sta: int, text: str) -> None:
     """Draw text in a rect with the same alignment/style rules render_component uses
-    for Text components. Use Liberation Mono Bold (or Pillow default) sized to ~70%
-    of `h`. xcen: 0=left,1=center,2=right. ycen: 0=top,1=center,2=bottom. sta: 0=crop,
-    1=solid bg, 2=image (treat 2 like 0 for now)."""
+    for Text components. Uses the project's ZI font for `font_id` if available,
+    otherwise falls back to Liberation Mono Bold (or Pillow default) sized to
+    ~70% of `h`. xcen: 0=left,1=center,2=right. ycen: 0=top,1=center,2=bottom.
+    sta: 0=crop, 1=solid bg, 2=image (treat 2 like 0 for now)."""
     overlay = _ensure_overlay(state)
     draw = ImageDraw.Draw(overlay)
     if sta == 1:
         draw.rectangle([x, y, x + w - 1, y + h - 1], fill=_rgba(bco))
-    font_pt = font_size_for(font_id, h)
-    font = load_font(font_pt)
-    align_text(draw, text, font, (x, y, w, h), xcen, ycen, _rgba(pco))
+    zi = (getattr(state, "fonts", {}) or {}).get(font_id)
+    if zi is not None:
+        # draw_zi_text expects an RGB image and a 3-tuple fill, but we have
+        # an RGBA overlay. Use the RGBA fill directly — Pillow's paste with
+        # an L-mode mask works fine on RGBA targets.
+        from sim.renderer import draw_zi_text
+        draw_zi_text(overlay, text, zi, (x, y, w, h), xcen, ycen, _rgba(pco))
+    else:
+        font_pt = font_size_for(font_id, h)
+        font = load_font(font_pt)
+        align_text(draw, text, font, (x, y, w, h), xcen, ycen, _rgba(pco))
     state.dirty = True
