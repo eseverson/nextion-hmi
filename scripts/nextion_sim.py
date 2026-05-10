@@ -52,6 +52,11 @@ def main() -> int:
     ap.add_argument("--bind", default="tcp:127.0.0.1:9999")
     ap.add_argument("--scale", type=int, default=1)
     ap.add_argument("--start-page", default=None)
+    ap.add_argument("--orientation", type=int, default=0,
+                    choices=[0, 90, 180, 270],
+                    help="Display orientation in degrees. Mirrors the TFT's "
+                         "ui_orientation field. The HMI stores coords at 0°; "
+                         "this rotates at render time.")
     ap.add_argument("--log-commands", action="store_true")
     ap.add_argument("--log-level", default="INFO")
     ap.add_argument("--headless", action="store_true",
@@ -71,6 +76,7 @@ def main() -> int:
     state = load_hmi(args.hmi)
     if args.start_page and args.start_page in state.pages:
         state.active_page = state.pages[args.start_page]
+    state.orientation = args.orientation
     transport = _build_transport(args.bind)
     if args.record:
         from sim.recorder import RecordingTransport

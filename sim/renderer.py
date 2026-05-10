@@ -304,7 +304,12 @@ def render_component(img: Image.Image, draw: ImageDraw.ImageDraw, c, page_bg, fo
 class Renderer:
     """Renders a DisplayState's active page into a Pillow Image."""
 
-    def render(self, state) -> Image.Image:
+    def render(
+        self,
+        state,
+        show_outlines: bool = False,
+        show_ids: bool = False,
+    ) -> Image.Image:
         page = state.active_page
         w = page.attrs.get("w", 480)
         h = page.attrs.get("h", 320)
@@ -337,5 +342,38 @@ class Renderer:
         if dim < 100:
             factor = max(0.05, dim / 100.0)
             img = Image.eval(img, lambda v: int(v * factor))
+        # Debug overlays — drawn at full brightness on top of everything.
+        if show_outlines or show_ids:
+            ov = ImageDraw.Draw(img)
+            label_font = load_font(10)
+            for c in sorted(page.components, key=lambda c: c.attrs.get("id", 0)):
+                a = c.attrs
+                cw = a.get("w", 0); ch = a.get("h", 0)
+                if cw <= 0 or ch <= 0:
+                    continue
+                cx = a.get("x", 0); cy = a.get("y", 0)
+                if show_outlines:
+                    ov.rectangle(
+                        [cx, cy, cx + cw - 1, cy + ch - 1],
+                        outline=(255, 0, 255),
+                    )
+                if show_ids:
+                    ov.text(
+                        (cx + 1, cy + 1),
+                        str(a.get("id", "?")),
+                        font=label_font,
+                        fill=(255, 0, 255),
+                    )
+        # Apply orientation as a post-rotation. The HMI stores logical
+        # coordinates (as authored at 0°); the device runtime rotates the
+        # framebuffer for 180°/90°/270°. We mirror that here so a project
+        # configured with H1+0x14=0x03 (180°) renders flipped.
+        orientation = getattr(state, "orientation", 0) or 0
+        if orientation == 180:
+            img = img.transpose(Image.ROTATE_180)
+        elif orientation == 90:
+            img = img.transpose(Image.ROTATE_90)
+        elif orientation == 270:
+            img = img.transpose(Image.ROTATE_270)
         state.dirty = False
         return img

@@ -79,6 +79,12 @@ class DisplayState:
     # of the .zi filename — e.g. `0.zi` => 0). Empty when fonts couldn't be
     # parsed; renderer falls back to a TTF substitute in that case.
     fonts: dict = field(default_factory=dict)
+    # Display orientation in degrees (0/90/180/270). Mirrors the TFT's
+    # `ui_orientation` byte (H1+0x14). 180° is applied at render time as a
+    # post-rotation; 90/270 swap canvas dimensions and rebake at render too.
+    # The miata-dash HMI itself stores logical coords (0° as authored), so
+    # this is a runtime hint only.
+    orientation: int = 0
 
     def __post_init__(self):
         self.pages_by_id = {p.id: p for p in self.pages.values()}
