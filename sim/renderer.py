@@ -25,7 +25,13 @@ T_SLIDER = 1
 T_HOTSPOT = 109
 T_TIMER = 51
 T_CHECKBOX = 56
+T_RADIO = 57
+T_QRCODE = 58
 T_PICTURE = 112
+T_DUAL_STATE_BUTTON = 53
+T_CROP_PICTURE = 5
+T_WAVEFORM = 0
+T_UNKNOWN_113 = 113
 
 INVISIBLE_TYPES = {T_VARIABLE, T_HOTSPOT, T_TIMER}
 
@@ -314,6 +320,65 @@ def render_component(img: Image.Image, draw: ImageDraw.ImageDraw, c, page_bg,
             maxval = 100
         hx = x + (w * max(0, min(maxval, val))) // maxval
         draw.ellipse([hx - 6, y + h // 2 - 6, hx + 6, y + h // 2 + 6], fill=pco)
+        return
+
+    if t == T_DUAL_STATE_BUTTON:
+        # Like Button but with two states (val=0 normal, val=1 pressed)
+        # We render the current state's text centered.
+        txt = a.get("txt", "") or ""
+        _draw_text(img, draw, txt, a.get("font"), fonts, (x, y, w, h),
+                   a.get("xcen", 1), a.get("ycen", 1), pco)
+        return
+
+    if t == T_CHECKBOX:
+        # Box outline + inner fill if val=1
+        draw.rectangle([x, y, x + w - 1, y + h - 1], outline=pco, width=2)
+        if a.get("val", 0):
+            m = max(3, min(w, h) // 4)
+            draw.rectangle([x + m, y + m, x + w - 1 - m, y + h - 1 - m], fill=pco)
+        return
+
+    if t == T_RADIO:
+        # Circle outline + inner dot if val=1
+        draw.ellipse([x, y, x + w - 1, y + h - 1], outline=pco, width=2)
+        if a.get("val", 0):
+            m = max(3, min(w, h) // 4)
+            draw.ellipse([x + m, y + m, x + w - 1 - m, y + h - 1 - m], fill=pco)
+        return
+
+    if t == T_QRCODE:
+        # QR Code (type 58): just draw a placeholder pattern — generating
+        # the real QR from a.txt requires a library we don't depend on.
+        # The pattern is a finder-square-ish look so it's visually
+        # distinguishable as "a QR code goes here".
+        draw.rectangle([x, y, x + w - 1, y + h - 1], outline=pco)
+        # Three finder squares (top-left, top-right, bottom-left)
+        fs = max(3, min(w, h) // 6)
+        for fx, fy in [(x + 4, y + 4),
+                       (x + w - 4 - fs, y + 4),
+                       (x + 4, y + h - 4 - fs)]:
+            draw.rectangle([fx, fy, fx + fs - 1, fy + fs - 1], outline=pco, width=2)
+            draw.rectangle([fx + fs // 3, fy + fs // 3,
+                            fx + fs - 1 - fs // 3, fy + fs - 1 - fs // 3], fill=pco)
+        return
+
+    if t == T_WAVEFORM:
+        # Waveform/Graph (type 0). Without a sample history we just
+        # show the bg fill + axes border. The sim doesn't simulate
+        # `add` commands populating samples yet.
+        draw.rectangle([x, y, x + w - 1, y + h - 1], outline=pco)
+        return
+
+    if t == T_CROP_PICTURE:
+        # Crop Picture (type 5): draws a sub-region of a picture. We
+        # don't have crop coords decoded yet — render the bg fill so
+        # the component is visible.
+        return
+
+    if t in (T_UNKNOWN_113,):
+        # Type 113 — undocumented in our sources. Show a hint outline
+        # so it's visible without spamming `<type N>` placeholder.
+        draw.rectangle([x, y, x + w - 1, y + h - 1], outline=pco)
         return
 
     # Fallback: outline + label so unhandled types are visible
