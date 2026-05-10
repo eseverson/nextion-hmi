@@ -257,6 +257,29 @@ A live catalogue of remaining unknowns + queued experiments lives at
 [`findings/G-research-roadmap.md`](findings/G-research-roadmap.md).
 Update it whenever an experiment lands or a new question opens.
 
+### Current high-leverage discoveries (post-batch 2)
+
+- **F-series H2 cipher cracked structurally** — 32-byte repeating XOR
+  pad. **16 of 32 key bytes recovered** from baseline known-plaintext
+  addresses (resources, usercode, videos, audios). See
+  [findings/L](findings/L-h2-cipher-cracked-half.md).
+- **F-series H2 schema deviates from T0/K0** — `pictures_count` is at
+  H2+0x3a (not 0x34); other fields likely shifted too. See
+  [findings/M](findings/M-loop-bytecode-and-pic.md) and
+  [findings/N](findings/N-loop-bytecode-and-schema.md).
+- **T6 loop bytecode partly decoded** — `cjmp` opcode is `09 00 04`,
+  `jmp` (backward) is `54 20 ...`. ASCII bytes used for inline
+  literals. [findings/N](findings/N-loop-bytecode-and-schema.md).
+- **TFT body locations pinpointed**: Variable val at HMI offset
+  0x71ae18 (21067 bytes into 0.pa); Text txt at 0x71db4d; component
+  bco at 0x720f6a. See [findings/I](findings/I-experiment-batch-2.md).
+- **HMI sectors are 64 KB-aligned** — structural changes grow the
+  HMI by 0x10238 bytes (64K + overhead). Append-only journal confirmed
+  with cumulative tombstones across saves.
+- **Page CRC algorithm remains unknown** — 384 standard CRC variants +
+  a dozen non-CRC hashes × 5 prefix combinations × 9 payload ranges
+  all rejected. Custom algorithm. See `scripts/crack_page_crc{,2}.py`.
+
 ## Suggested follow-ups, ranked
 
 1. **F-series H2 XOR key recovery** — single highest-leverage. Unblocks
