@@ -74,3 +74,43 @@ def test_headless_touch_press_only_does_not_release(hmi_path, tmp_path):
     app.step()
     # After press, we're on settings (from the page-switch script).
     assert state.active_page.name == "settings"
+
+
+def _make_state_with(*components):
+    from sim.state import DisplayState, Page
+    page = Page(name="p0", id=0, attrs={"w": 480, "h": 320},
+                components=list(components))
+    return DisplayState(pages={"p0": page})
+
+
+def test_touch_toggles_checkbox(tmp_path):
+    from sim.state import Component
+    cb = Component(name="c0", id=1, type=56, attrs={"val": 0, "x": 0, "y": 0, "w": 30, "h": 30})
+    state = _make_state_with(cb)
+    transport = _StubTransport()
+    app = HeadlessApp(state, transport, out_path=tmp_path / "live.png")
+    transport.push(b"touch c0")
+    app.step()
+    assert cb.attrs["val"] == 1
+    transport.push(b"touch c0")
+    app.step()
+    assert cb.attrs["val"] == 0
+
+
+def test_touch_selects_one_radio(tmp_path):
+    from sim.state import Component
+    r0 = Component(name="r0", id=1, type=57, attrs={"val": 0, "x": 0, "y": 0, "w": 30, "h": 30})
+    r1 = Component(name="r1", id=2, type=57, attrs={"val": 1, "x": 40, "y": 0, "w": 30, "h": 30})
+    r2 = Component(name="r2", id=3, type=57, attrs={"val": 0, "x": 80, "y": 0, "w": 30, "h": 30})
+    state = _make_state_with(r0, r1, r2)
+    transport = _StubTransport()
+    app = HeadlessApp(state, transport, out_path=tmp_path / "live.png")
+    transport.push(b"touch r0")
+    app.step()
+    assert r0.attrs["val"] == 1
+    assert r1.attrs["val"] == 0
+    assert r2.attrs["val"] == 0
+    # Clicking the same radio again keeps it selected (no toggle-off).
+    transport.push(b"touch r0")
+    app.step()
+    assert r0.attrs["val"] == 1

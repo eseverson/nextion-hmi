@@ -24,6 +24,8 @@ TICK_MS = 33
 
 LOG_LINES = 12     # recent commands kept in scrollback
 T_SLIDER = 1       # component-type id for sliders (matches renderer)
+T_CHECKBOX = 56
+T_RADIO = 57
 
 
 def _settings_path() -> Path:
@@ -922,9 +924,26 @@ class App:
         c = self._resolve_click(ev.x, ev.y)
         if c is None:
             return
+        self._toggle_check_or_radio(c)
         self.events.touch_release(self.state.active_page.id, c.id)
         self._log("tx", f"touch_release({self.state.active_page.name}.{c.name})")
         self._run_component_event(c, "codesup")
+
+    def _toggle_check_or_radio(self, c) -> None:
+        if c.type == T_CHECKBOX:
+            c.set("val", 0 if c.attrs.get("val", 0) else 1)
+            self.state.dirty = True
+            return
+        if c.type == T_RADIO:
+            # Page-wide mutual exclusion: clear every other radio and
+            # set this one. Nextion has no explicit grouping attribute,
+            # so all radios on a page form one group.
+            for other in self.state.active_page.components:
+                if other.type == T_RADIO and other is not c:
+                    if other.attrs.get("val", 0):
+                        other.set("val", 0)
+            c.set("val", 1)
+            self.state.dirty = True
 
     def _update_slider_val(self, c, x: int, y: int) -> None:
         """Map a canvas-coord touch to a slider's val and store it."""
@@ -990,6 +1009,7 @@ class App:
             self.events.touch_press(self.state.active_page.id, c.id)
             self._run_component_event(c, "codesdown")
         if action in ("release", "click"):
+            self._toggle_check_or_radio(c)
             self.events.touch_release(self.state.active_page.id, c.id)
             self._run_component_event(c, "codesup")
 

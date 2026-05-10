@@ -107,7 +107,23 @@ class HeadlessApp:
         if action in ("press", "click"):
             self._run_component_event(c, "codesdown")
         if action in ("release", "click"):
+            self._toggle_check_or_radio(c)
             self._run_component_event(c, "codesup")
+
+    def _toggle_check_or_radio(self, c) -> None:
+        # Checkbox (56) toggles val; Radio (57) becomes the only val=1
+        # on its page. Matches Nextion firmware behavior — the implicit
+        # val update happens before any user script runs.
+        if c.type == 56:
+            c.set("val", 0 if c.attrs.get("val", 0) else 1)
+            self.state.dirty = True
+            return
+        if c.type == 57:
+            for other in self.state.active_page.components:
+                if other.type == 57 and other is not c and other.attrs.get("val", 0):
+                    other.set("val", 0)
+            c.set("val", 1)
+            self.state.dirty = True
 
     def handle_frame(self, frame: bytes) -> None:
         """Apply a single command frame; mirror of App.handle_frame."""
