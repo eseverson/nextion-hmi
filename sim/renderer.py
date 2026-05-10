@@ -216,7 +216,8 @@ def _draw_text(
 
 
 def render_component(img: Image.Image, draw: ImageDraw.ImageDraw, c, page_bg,
-                     fonts: dict | None = None, pictures: dict | None = None):
+                     fonts: dict | None = None, pictures: dict | None = None,
+                     time_ms: int = 0):
     fonts = fonts or {}
     pictures = pictures or {}
     a = c.rawData["att"]
@@ -283,10 +284,47 @@ def render_component(img: Image.Image, draw: ImageDraw.ImageDraw, c, page_bg,
         draw.rectangle([x, y, x + w - 1, y + h - 1], outline=(80, 80, 80))
         return
 
-    if t == T_TEXT or t == T_SCROLLING_TEXT:
+    if t == T_TEXT:
         txt = a.get("txt", "") or ""
         _draw_text(img, draw, txt, a.get("font"), fonts, (x, y, w, h),
                    a.get("xcen", 1), a.get("ycen", 1), pco)
+        return
+
+    if t == T_SCROLLING_TEXT:
+        # Scrolling Text: text enters from the right, moves left across
+        # the box, exits to the left, repeats. The box itself stays put;
+        # we render the text onto a clipped layer and shift it by the
+        # animation offset derived from `time_ms`.
+        txt = a.get("txt", "") or ""
+        font_id = a.get("font")
+        from PIL import Image as _Image
+        clip = _Image.new("RGB", (max(w, 1), max(h, 1)), bco)
+        clip_draw = ImageDraw.Draw(clip)
+        # Measure text width via Pillow's default font as a fallback.
+        try:
+            ttf = load_font(font_size_for(font_id, fonts))
+            tbbox = clip_draw.textbbox((0, 0), txt, font=ttf)
+            text_w = tbbox[2] - tbbox[0]
+        except Exception:
+            text_w = len(txt) * 8
+        # Total scroll cycle: text travels from x=w (off right edge) all
+        # the way to x=-text_w (off left edge), then wraps.
+        cycle = w + text_w
+        if cycle <= 0:
+            cycle = max(w, 1)
+        speed_px_per_sec = 60
+        progress = int((time_ms / 1000) * speed_px_per_sec) % cycle
+        # Direction 0 (default) = scroll left (text starts right, ends left).
+        # Direction 1 = scroll right (text starts left, ends right).
+        direction = a.get("dir", 0) or 0
+        if direction == 1:
+            text_x = -text_w + progress
+        else:
+            text_x = w - progress
+        _draw_text(clip, clip_draw, txt, font_id, fonts,
+                   (text_x, 0, text_w, h),
+                   a.get("xcen", 0), a.get("ycen", 1), pco)
+        img.paste(clip, (x, y))
         return
 
     if t in (T_NUMBER, T_XFLOAT):
@@ -465,12 +503,13 @@ class Renderer:
         draw = ImageDraw.Draw(img)
         fonts = getattr(state, "fonts", {}) or {}
         pictures = getattr(state, "pictures", {}) or {}
+        time_ms = getattr(state, "time_ms", 0)
         # Render in id order (matches Nextion paint order)
         for c in sorted(page.components, key=lambda c: c.attrs.get("id", 0)):
             # Adapt: render_component expects a Nextion2Text-style component
             # with c.rawData["att"]. Build a tiny shim.
             shim = type("Shim", (), {"rawData": {"att": c.attrs}})()
-            render_component(img, draw, shim, bg, fonts, pictures)
+            render_component(img, draw, shim, bg, fonts, pictures, time_ms)
         # Composite the per-page draw overlay (filled by `fill`/`xstr`/etc.
         # primitives invoked from event scripts). Nextion paints these on
         # top of static components.

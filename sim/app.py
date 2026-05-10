@@ -1026,6 +1026,12 @@ class App:
         try:
             self._drain_transport()
             self.timer_sched.tick(_now_ms(), self._on_timer_fire)
+            # Advance the animation clock and force a redraw if the
+            # active page has any time-animated components (Scrolling
+            # Text, etc.).
+            self.state.time_ms += TICK_MS
+            if any(c.type == 55 for c in self.state.active_page.components):
+                self.state.dirty = True
             # Capture dirty BEFORE _redraw clears it; gate the inspector on
             # the same flag so we don't rewrite text widgets every 33 ms.
             was_dirty = self.state.dirty

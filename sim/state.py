@@ -90,6 +90,9 @@ class DisplayState:
     # The miata-dash HMI itself stores logical coords (0° as authored), so
     # this is a runtime hint only.
     orientation: int = 0
+    # Monotonic ms-since-load counter advanced by the sim's tick loop.
+    # Drives time-based animations (Scrolling Text, etc.) at render time.
+    time_ms: int = 0
 
     def __post_init__(self):
         self.pages_by_id = {p.id: p for p in self.pages.values()}
