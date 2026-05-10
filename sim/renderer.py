@@ -306,16 +306,17 @@ def render_component(img: Image.Image, draw: ImageDraw.ImageDraw, c, page_bg,
         return
 
     if t == T_GAUGE:
-        # Render as an outlined circle with a single radial line
+        # Render as an outlined circle with a single radial line.
         cx, cy = x + w // 2, y + h // 2
         r = min(w, h) // 2 - 2
         if r > 0:
             draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline=pco, width=2)
             val = a.get("val", 0) or 0
-            # Nextion gauge: val 0..360, 0 = pointing down (6 o'clock)?
-            # We just draw something reasonable for preview purposes.
+            # Nextion gauge convention: val 0..360 in degrees, with
+            # val=0 pointing LEFT (180° in standard math coords),
+            # increasing clockwise. So screen angle = 180° + val.
             import math
-            angle = math.radians(val - 90)
+            angle = math.radians(180 + val)
             ex = cx + int(r * 0.85 * math.cos(angle))
             ey = cy + int(r * 0.85 * math.sin(angle))
             draw.line([cx, cy, ex, ey], fill=pco, width=3)
@@ -376,12 +377,39 @@ def render_component(img: Image.Image, draw: ImageDraw.ImageDraw, c, page_bg,
         return
 
     if t == T_QRCODE:
-        # QR Code (type 58): just draw a placeholder pattern — generating
-        # the real QR from a.txt requires a library we don't depend on.
-        # The pattern is a finder-square-ish look so it's visually
-        # distinguishable as "a QR code goes here".
+        # Generate the real QR from `txt`. Falls back to a finder-pattern
+        # placeholder if `segno` isn't installed or txt is empty.
+        txt = a.get("txt", "") or ""
+        if txt:
+            try:
+                import segno
+                qr = segno.make(txt, error="m")
+                # qr.matrix is a list of row tuples of 0/1; render as
+                # PIL image at the component's box dimensions.
+                matrix = qr.matrix
+                mw = len(matrix[0])
+                mh = len(matrix)
+                # Pick a pixel scale that fits within w/h, then center.
+                scale = max(1, min(w // mw, h // mh))
+                qr_w = mw * scale
+                qr_h = mh * scale
+                ox = x + (w - qr_w) // 2
+                oy = y + (h - qr_h) // 2
+                for ry, row in enumerate(matrix):
+                    for cx_, cell in enumerate(row):
+                        if cell:
+                            draw.rectangle(
+                                [ox + cx_ * scale, oy + ry * scale,
+                                 ox + (cx_ + 1) * scale - 1,
+                                 oy + (ry + 1) * scale - 1],
+                                fill=pco)
+                return
+            except ImportError:
+                pass
+            except Exception:
+                pass
+        # Fallback: placeholder finder pattern.
         draw.rectangle([x, y, x + w - 1, y + h - 1], outline=pco)
-        # Three finder squares (top-left, top-right, bottom-left)
         fs = max(3, min(w, h) // 6)
         for fx, fy in [(x + 4, y + 4),
                        (x + w - 4 - fs, y + 4),
