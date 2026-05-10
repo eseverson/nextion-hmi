@@ -134,4 +134,35 @@ def load_hmi(path: str | Path) -> DisplayState:
             # Unsupported / malformed font → leave it absent; renderer will
             # use the TTF fallback for this font_id.
             continue
+
+    # Page CRC sanity check — per finding Q (2026-05-10), each `*.pa`
+    # entry has a 5-segment chained CRC32-MPEG2 at offset 0. Verify all
+    # live pages and warn (don't fail) on mismatch — the user might have
+    # hand-edited a file in a way that didn't update the CRC.
+    try:
+        from scripts.page_crc import page_crc as _page_crc
+    except ImportError:
+        _page_crc = None
+    if _page_crc is not None:
+        import logging
+        log = logging.getLogger("sim.loader")
+        for entry in hmi.header.content:
+            name = getattr(entry, "name", "") or ""
+            if not name.endswith(".pa") or getattr(entry, "deleted", 0):
+                continue
+            blob = hmi.raw[entry.start:entry.start + entry.size]
+            if len(blob) < 0x38:
+                continue
+            import struct as _s
+            stored = _s.unpack_from("<I", blob, 0)[0]
+            try:
+                computed = _page_crc(blob)
+            except Exception:
+                continue
+            if stored != computed:
+                log.warning(
+                    "page %s: CRC mismatch (stored=0x%08x computed=0x%08x) — "
+                    "file may have been hand-edited without CRC fixup",
+                    name, stored, computed)
+
     return state
