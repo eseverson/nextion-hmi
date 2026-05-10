@@ -118,6 +118,15 @@ def _extract_page_bco(data: bytes) -> int | None:
     return extract_page_bco(data)
 
 
+def _extract_variable_vals(data: bytes, n_variables: int) -> list[int]:
+    import sys as _sys
+    repo_root = Path(__file__).resolve().parents[1]
+    if str(repo_root) not in _sys.path:
+        _sys.path.insert(0, str(repo_root))
+    from scripts.tft_format import extract_variable_vals
+    return extract_variable_vals(data, n_variables)
+
+
 def _parse_pages(data: bytes, info: dict) -> list[dict]:
     """Page directory at `pageadd`: 16 bytes per entry (`pagexinxi` struct)."""
     pages = []
@@ -197,6 +206,9 @@ def load_tft(path: str | Path) -> DisplayState:
     objs_by_page = _parse_objdata_ram(raw, h1info, page_dir)
     text_slots = _extract_text_slots(raw)
     page_bco = _extract_page_bco(raw)
+    n_variables = sum(1 for objs in objs_by_page.values()
+                      for o in objs if o["type"] == 52)
+    var_vals = _extract_variable_vals(raw, n_variables)
 
     # Walk all text-bearing components in TFT order and pair them with
     # extracted text slots. Best-effort: assumes the editor emits txt
@@ -207,6 +219,14 @@ def load_tft(path: str | Path) -> DisplayState:
     def _next_txt():
         try:
             return next(text_iter)[1]
+        except StopIteration:
+            return None
+
+    var_iter = iter(var_vals)
+
+    def _next_val():
+        try:
+            return next(var_iter)
         except StopIteration:
             return None
 
@@ -237,6 +257,12 @@ def load_tft(path: str | Path) -> DisplayState:
                 t = _next_txt()
                 if t is not None:
                     attrs["txt"] = t
+            # Variables (type=52) carry their `val` from the dedicated
+            # u32 array after the `90 01 01 00` marker.
+            if o["type"] == 52:
+                v = _next_val()
+                if v is not None:
+                    attrs["val"] = v
             components.append(Component(
                 name=o["name"], id=o["id"], type=o["type"], attrs=attrs,
                 events={},

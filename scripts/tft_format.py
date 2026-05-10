@@ -165,6 +165,29 @@ def extract_page_bco(data: bytes) -> int | None:
     return bco
 
 
+def extract_variable_vals(data: bytes, n_variables: int) -> list[int]:
+    """Pull Variable component `val` values out of the TFT's flat data
+    region.
+
+    Variable vals are stored as a contiguous u32-LE array preceded by a
+    fixed 4-byte marker `90 01 01 00`. The array length matches the
+    project's Variable component count (type=52). Returns an empty list
+    if the marker can't be located.
+    """
+    marker = bytes.fromhex("90010100")
+    if len(data) < H2_END:
+        return []
+    # Search after H2 (no point looking inside the encrypted header).
+    idx = data.find(marker, RESOURCES_START)
+    if idx < 0 or idx + 4 + 4 * n_variables > len(data):
+        return []
+    out = []
+    for i in range(n_variables):
+        v = struct.unpack_from("<I", data, idx + 4 + i * 4)[0]
+        out.append(v)
+    return out
+
+
 def extract_text_slots(data: bytes) -> list[tuple[int, str]]:
     """Heuristically pull `txt` attribute strings out of the TFT body.
 
