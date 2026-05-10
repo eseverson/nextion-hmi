@@ -1,6 +1,6 @@
 # Path A — Nextion HMI directory format
 
-Source under study: `nextion.hmi.HMI` (7,505,535 bytes, NX4832F035_011 / "Nextion 3.5\" Discovery 320x480").
+Source under study: `nextion.hmi.HMI` (7,505,535 bytes, NX4832F035\_011 / "Nextion 3.5" Discovery 320x480").
 
 Cross-referenced against `tools/Nextion2Text/Nextion2Text.py` (`HMIHeader`,
 `HMIContentHeader`, `PageHeader` classes) and `tools/nxt-doc/`. nxt-doc's
@@ -36,7 +36,7 @@ starting at 0x00700000.
 ```
 
 The directory header is mirrored at offset `0x00080000` byte-for-byte.
-This file: 620 bytes (4 + 22*28) of meaningful data, both copies match
+This file: 620 bytes (4 + 22\*28) of meaningful data, both copies match
 exactly. Likely a redundancy / wear-levelling backup. Nextion2Text only
 reads the primary copy; it does not check the backup or compare them.
 
@@ -63,16 +63,16 @@ Best-fit struct, partially confirmed against Nextion2Text's
 
 This file's full directory (live entries):
 
-| #  | name      | start       | size      | tail (b0,b1,b2) | content type |
-|----|-----------|-------------|-----------|-----------------|--------------|
-| 0  | 3.pa      | 0x00700000  | 0x00050a  | (5,0,0)         | page "error" |
-| 1  | main.HMI  | 0x0070050a  | 0x0000c0  | (213,83,0)      | global metadata |
-| 2  | Program.s | 0x007005ca  | 0x0002a7  | (2,0,0)         | global script |
-| 7  | 2.pa      | 0x00700e8a  | 0x00050a  | (5,0,0)         | page "gauge" |
-| 11 | 0.zi      | 0x007020c6  | 0x00364b  | (152,236,29)    | font "liberiso-8859-1" |
-| 13 | 1.pa      | 0x00706778  | 0x001067  | (16,0,0)        | page "settings" |
-| 17 | 1.zi      | 0x0070b1aa  | 0x0090ce  | (151,56,119)    | font "liber-48iso-8859-1" |
-| 20 | 0.pa      | 0x0071ef4d  | 0x00566b  | (86,0,0)        | page "main" |
+| # | name | start | size | tail (b0,b1,b2) | content type |
+| --- | --- | --- | --- | --- | --- |
+| 0 | 3.pa | 0x00700000 | 0x00050a | (5,0,0) | page "error" |
+| 1 | main.HMI | 0x0070050a | 0x0000c0 | (213,83,0) | global metadata |
+| 2 | Program.s | 0x007005ca | 0x0002a7 | (2,0,0) | global script |
+| 7 | 2.pa | 0x00700e8a | 0x00050a | (5,0,0) | page "gauge" |
+| 11 | 0.zi | 0x007020c6 | 0x00364b | (152,236,29) | font "liberiso-8859-1" |
+| 13 | 1.pa | 0x00706778 | 0x001067 | (16,0,0) | page "settings" |
+| 17 | 1.zi | 0x0070b1aa | 0x0090ce | (151,56,119) | font "liber-48iso-8859-1" |
+| 20 | 0.pa | 0x0071ef4d | 0x00566b | (86,0,0) | page "main" |
 
 The other 14 entries are tombstoned (`deleted == 1`). All of their
 `start/size` values still point at valid, parseable data — see
@@ -84,23 +84,23 @@ The 14 deleted entries fall into version clusters. For each live entry of
 non-trivial size there are 0..3 older copies in the file, all flagged
 `deleted=1` and all left intact:
 
-| live entry      | older copies (deleted) | notes |
-|-----------------|------------------------|-------|
-| main.HMI (#1)   | #3, #5                 | three identical 192-byte blobs |
-| Program.s (#2)  | #6                     | older, longer draft (0x2f6 vs 0x2a7 bytes) |
-| 1.pa (#13)      | #9, #12, #15           | sizes 0xc8e, 0x1067, 0xc8e — last save extended the page |
-| 0.pa (#20)      | #18, #19, #21          | three older 0.pa snapshots; #19 differs from #20 in only 7 bytes (the leading CRC) |
+| live entry | older copies (deleted) | notes |
+| --- | --- | --- |
+| main.HMI (#1) | #3, #5 | three identical 192-byte blobs |
+| Program.s (#2) | #6 | older, longer draft (0x2f6 vs 0x2a7 bytes) |
+| 1.pa (#13) | #9, #12, #15 | sizes 0xc8e, 0x1067, 0xc8e — last save extended the page |
+| 0.pa (#20) | #18, #19, #21 | three older 0.pa snapshots; #19 differs from #20 in only 7 bytes (the leading CRC) |
 
 Diff between live 0.pa (#20) and deleted 0.pa (#19): 7 bytes out of
 22,123 — confirming the deleted entry is a previous save of the same
 page, not unrelated junk.
 
-This means the Nextion editor's HMI writer is **append-only at the data
-area**: a save never rewrites in place, it appends a new copy and flips
+This means the Nextion editor's HMI writer is **append-only at the data**
+**area**: a save never rewrites in place, it appends a new copy and flips
 the old entry's `deleted` byte. The data area is compacted only when the
-editor performs an explicit save-as / clean. **For an undo-history
-extractor this is a goldmine — earlier versions of pages and scripts
-remain fully recoverable from a single .HMI file.** Nextion2Text's
+editor performs an explicit save-as / clean. **For an undo-history**
+**extractor this is a goldmine — earlier versions of pages and scripts**
+**remain fully recoverable from a single .HMI file.** Nextion2Text's
 loader silently filters tombstoned entries (`if obj:` calls
 `__bool__ = not deleted`) so it never surfaces this.
 
@@ -164,33 +164,33 @@ each component the visible substrings (`att-NN`, `codesload-N`,
 `codesup-N`, `codesdown-N`, `codestimer-NN`, `codesunload-N`,
 `codesslide-N`) are sub-record names; they are **not** top-level
 directory entries. Total occurrences in this file:
-`att-NN`=148, `codesup-N`=122, `codesdown-N`=121, `codesload-N`=9,
-`codesunload-N`=9, `codestimer-N`=4, `codesslide-N`=4. All four pages'
+`att-NN`\=148, `codesup-N`\=122, `codesdown-N`\=121, `codesload-N`\=9,
+`codesunload-N`\=9, `codestimer-N`\=4, `codesslide-N`\=4. All four pages'
 component data lies inside their parent `*.pa` blob.
 
 ## Open questions / TBD
 
-1. The 3 trailing bytes of the entry (currently named `tail0/1/2`) for
-   font and main.HMI entries do not follow the `size >> 8` pattern that
-   pages and Program.s use. They might encode a checksum, a
-   creation/modification timestamp, or be an artefact of the editor
-   writing a wider field that overlaps the next entry's name. Worth
-   diffing against a freshly-edited HMI to see which bytes change.
+The 3 trailing bytes of the entry (currently named `tail0/1/2`) for
+font and main.HMI entries do not follow the `size >> 8` pattern that
+pages and Program.s use. They might encode a checksum, a
+creation/modification timestamp, or be an artefact of the editor
+writing a wider field that overlaps the next entry's name. Worth
+diffing against a freshly-edited HMI to see which bytes change.
 
-2. The 4-byte `0xFFFFFFFF` sentinel at 0x00380000 has no obvious purpose
-   in a single-file capture. Hypothesis: the .HMI file is a dump of an
-   internal flash filesystem with three reserved sector-aligned slots
-   (primary dir / backup dir / sentinel) at 0, 0x80000, 0x380000, with
-   the user data confined to the last sector. Confirming would require
-   another HMI file from a different model.
+The 4-byte `0xFFFFFFFF` sentinel at 0x00380000 has no obvious purpose
+in a single-file capture. Hypothesis: the .HMI file is a dump of an
+internal flash filesystem with three reserved sector-aligned slots
+(primary dir / backup dir / sentinel) at 0, 0x80000, 0x380000, with
+the user data confined to the last sector. Confirming would require
+another HMI file from a different model.
 
-3. The first `u32` of each page blob is documented as a CRC by
-   Nextion2Text but the algorithm is not specified. Trying CRC32 over
-   the rest of the blob does **not** match (verified for all four pages
-   in this file). Likely a Nextion-specific polynomial or a different
-   payload range.
+The first `u32` of each page blob is documented as a CRC by
+Nextion2Text but the algorithm is not specified. Trying CRC32 over
+the rest of the blob does **not** match (verified for all four pages
+in this file). Likely a Nextion-specific polynomial or a different
+payload range.
 
-4. The `?` byte at PageHeader+0x15 and +0x17 is consistently non-zero
-   in this file (0x4f / 0x21 etc.) and varies per page — possibly a
-   page kind / palette index. Worth correlating against page type when a
-   second sample is available.
+The `?` byte at PageHeader+0x15 and +0x17 is consistently non-zero
+in this file (0x4f / 0x21 etc.) and varies per page — possibly a
+page kind / palette index. Worth correlating against page type when a
+second sample is available.
