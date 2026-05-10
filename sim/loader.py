@@ -48,6 +48,17 @@ def _ensure_nextion2text_on_path() -> None:
         sys.path.insert(0, str(n2t))
 
 
+def load(path: str | Path) -> DisplayState:
+    """Format-dispatching loader: routes `.tft` paths to the TFT loader,
+    everything else to the HMI loader. Use this when you don't know the
+    file's type up front — e.g. CLI flags."""
+    p = Path(path)
+    if p.suffix.lower() == ".tft":
+        from sim.tft_loader import load_tft
+        return load_tft(p)
+    return load_hmi(p)
+
+
 def load_hmi(path: str | Path) -> DisplayState:
     """Load a Nextion HMI file and return a populated DisplayState."""
     _ensure_ansi_codec()

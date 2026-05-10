@@ -16,7 +16,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from sim.app import App  # noqa: E402
 from sim.headless import HeadlessApp  # noqa: E402
 from sim.http import IntrospectionServer  # noqa: E402
-from sim.loader import load_hmi  # noqa: E402
+from sim.loader import load as load_state  # noqa: E402  format-dispatching
 from sim.transport import (  # noqa: E402
     TcpTransport, PtyTransport, StdinTransport, SerialTransport,
 )
@@ -48,7 +48,11 @@ def _build_transport(spec: str):
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--hmi", default=str(REPO_ROOT / "source" / "nextion.hmi.HMI"))
+    ap.add_argument("--hmi", default=str(REPO_ROOT / "source" / "nextion.hmi.HMI"),
+                    help="Path to .HMI or .tft file. TFT loads via sim/tft_loader.py — "
+                         "if a sibling .HMI exists with the same stem, components are "
+                         "pulled from it; otherwise pages render blank at the TFT's "
+                         "screen size.")
     ap.add_argument("--bind", default="tcp:127.0.0.1:9999")
     ap.add_argument("--scale", type=int, default=1)
     ap.add_argument("--start-page", default=None)
@@ -73,7 +77,7 @@ def main() -> int:
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
 
-    state = load_hmi(args.hmi)
+    state = load_state(args.hmi)
     if args.start_page and args.start_page in state.pages:
         state.active_page = state.pages[args.start_page]
 

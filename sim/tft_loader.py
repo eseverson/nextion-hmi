@@ -1,0 +1,211 @@
+"""sim/tft_loader — load an F-series .tft directly into a DisplayState.
+
+The TFT format is reverse-engineered to the point where every header
+layer can be read and resealed (see `findings/R-editor-unpacking.md`),
+but the on-disk *component* record is a variable-length compiled binary
+that's not yet fully decoded — extracting the same fidelity the HMI
+loader gets (text, color, font, events, etc.) needs more reverse
+engineering on `Myapp_inf.OutPutPageFile`.
+
+So: this loader's first responsibility is to extract everything we *can*
+read from the TFT (screen size, orientation, page count, per-page object
+counts, font count). Then, for component fidelity, it looks for a
+sibling `.HMI` of the same stem and delegates to the HMI loader for
+component definitions, splicing in the TFT-derived runtime fields
+(orientation, fonts) on top.
+
+Behaviour:
+
+    foo.tft + foo.HMI  → full DisplayState (HMI provides components,
+                          TFT provides screen geometry / orientation)
+    foo.tft alone      → DisplayState with empty `components` per page
+                          but valid screen geometry. The sim renders
+                          blank pages at the correct dimensions; this is
+                          enough to exercise non-component features
+                          (page-switching commands, system variables,
+                          program.s execution) but won't draw the UI.
+
+When more of the TFT object format is reversed, this loader can be
+upgraded in place; callers don't need to change.
+"""
+from __future__ import annotations
+import struct
+from pathlib import Path
+
+from sim.state import DisplayState, Page, Component
+from sim.font import parse_zi
+
+
+# Re-use the format constants without forcing an import cycle through
+# `scripts.tft_format` — those values are physical layout constants of
+# the file, not implementation details.
+_H1_END    = 0x0c4
+_H2_START  = 0x0c8
+_H2_END    = 0x18c
+_MODELCRC_OFF = 0x2e
+
+
+def _decrypt_h2(data: bytes) -> bytes:
+    """Decrypt the H2 ciphertext using the cipher in `scripts.h2_cipher`."""
+    # Imported lazily so this module is importable even when scripts/ isn't
+    # on sys.path yet (the sim entrypoint adds it).
+    import sys
+    repo_root = Path(__file__).resolve().parents[1]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    from scripts.h2_cipher import encrypt as h2_decrypt   # asm-verbatim = decrypt
+    model_crc = struct.unpack_from("<I", data, _MODELCRC_OFF)[0]
+    return h2_decrypt(data[_H2_START:_H2_END], model_crc)
+
+
+def _parse_appinf0(h1: bytes) -> dict:
+    """Plaintext H1 fields useful for runtime."""
+    return {
+        "screenw":       struct.unpack_from("<H", h1, 0x0c)[0],
+        "screenh":       struct.unpack_from("<H", h1, 0x0e)[0],
+        "lcdscreenw":    struct.unpack_from("<H", h1, 0x10)[0],
+        "lcdscreenh":    struct.unpack_from("<H", h1, 0x12)[0],
+        "guidire":       h1[0x14],     # orientation: 0=0°, 1=90°, 2=180°, 3=270° (matches HMI loader's H1+0x14)
+        "xiliemark":     h1[0x15],     # series mark (100=F-series)
+        "model_crc":     struct.unpack_from("<I", h1, _MODELCRC_OFF)[0],
+        "filever":       h1[0x32],
+    }
+
+
+def _parse_appinf1(h2_plain: bytes) -> dict:
+    """First 76 bytes of decrypted H2 are the appinf1 struct."""
+    u = struct.unpack_from("<14I8H2BH", h2_plain, 0)
+    return {
+        "staticstrBeg":   u[0],
+        "AppAllvasAddr":  u[1],
+        "AppAllvasQty":   u[2],
+        "attdataaddr":    u[3],
+        "resourcesfileddr": u[4],
+        "strdataaddr":    u[5],
+        "pageadd":        u[6],
+        "objxinxiadd":    u[7],
+        "picxinxiadd":    u[8],
+        "gmovxinxiadd":   u[9],
+        "videoxinxiadd":  u[10],
+        "wavxinxiadd":    u[11],
+        "zimoxinxiadd":   u[12],
+        "MainCodeHex":    u[13],
+        "pageqyt":        u[14],
+        "objqyt":         u[15],
+        "picqyt":         u[16],
+        "gmovqyt":        u[17],
+        "videoqyt":       u[18],
+        "wavqyt":         u[19],
+        "zimoqyt":        u[20],
+    }
+
+
+def _parse_pages(data: bytes, info: dict) -> list[dict]:
+    """Page directory at `pageadd`: 16 bytes per entry (`pagexinxi` struct)."""
+    pages = []
+    for i in range(info["pageqyt"]):
+        off = info["pageadd"] + i * 16
+        objstar, objqyt, _res, hexpos, attaddr, mediapos = struct.unpack_from(
+            "<HBBIII", data, off
+        )
+        pages.append({
+            "id": i,
+            "objstar": objstar,
+            "objqyt": objqyt,
+            "hexpos": hexpos,
+            "attaddr": attaddr,
+            "mediapos": mediapos,
+        })
+    return pages
+
+
+def _try_load_sibling_hmi(tft_path: Path) -> DisplayState | None:
+    """If a sibling `.HMI` exists with the same stem, load components from there."""
+    candidates = [
+        tft_path.with_suffix(".HMI"),
+        tft_path.with_suffix(".hmi"),
+    ]
+    for c in candidates:
+        if c.exists():
+            from sim.loader import load_hmi
+            try:
+                return load_hmi(c)
+            except Exception:
+                # Fall through — caller will get a TFT-only state.
+                return None
+    return None
+
+
+def load_tft(path: str | Path) -> DisplayState:
+    """Load an F-series TFT into a DisplayState.
+
+    For full component fidelity, also have the source `.HMI` next to the
+    `.tft` (same stem); the loader will pull components from there.
+    Without an HMI, you get a valid DisplayState with the right number
+    of pages at the right screen size, but no component definitions.
+    """
+    path = Path(path)
+    raw = path.read_bytes()
+
+    if len(raw) < _H2_END + 4:
+        raise ValueError(f"file too small to be a TFT: {len(raw)} bytes")
+
+    h1 = raw[:_H1_END]
+    h0 = _parse_appinf0(h1)
+    if h0["xiliemark"] != 100:
+        # Not an F-series TFT; the cipher won't apply. Bail rather than
+        # produce garbage.
+        raise ValueError(
+            f"unsupported TFT: xiliemark={h0['xiliemark']} (only F-series, "
+            f"xiliemark=100, is supported)"
+        )
+
+    h2_plain = _decrypt_h2(raw)
+    h1info = _parse_appinf1(h2_plain)
+    page_dir = _parse_pages(raw, h1info)
+
+    # Try the sibling HMI for component data.
+    hmi_state = _try_load_sibling_hmi(path)
+    if hmi_state is not None:
+        # Splice in TFT-derived runtime fields. The HMI loader sets
+        # orientation from its own sniff (it looks at sibling .tft already);
+        # we override here in case the HMI was authored at a different
+        # rotation than the TFT was compiled at.
+        hmi_state.orientation = _orientation_from_guidire(h0["guidire"])
+        return hmi_state
+
+    # Fallback: skeleton DisplayState with empty pages.
+    pages: dict[str, Page] = {}
+    for entry in page_dir:
+        pid = entry["id"]
+        name = f"page{pid}"
+        pages[name] = Page(
+            name=name,
+            id=pid,
+            attrs={
+                "objname": name,
+                "w": h0["lcdscreenw"],
+                "h": h0["lcdscreenh"],
+                # Note: we don't have the page's real bco / fsw / sta /
+                # password from the TFT yet; defaults of 0 mean black bg.
+            },
+            components=[],   # TFT-only loader: components not yet decoded
+            events={},
+        )
+
+    state = DisplayState(pages=pages)
+    state.orientation = _orientation_from_guidire(h0["guidire"])
+
+    # Fonts live at known offsets (zimoxinxiadd) but the on-disk format
+    # for the per-font index isn't the same as the HMI's `*.zi` entry —
+    # leaving fonts empty is consistent with the no-HMI fallback path.
+    return state
+
+
+def _orientation_from_guidire(guidire: int) -> int:
+    """Translate the H1 `guidire` byte to a rotation in degrees.
+
+    The HMI loader infers orientation from the *sibling* TFT's H1+0x14
+    using the same byte. Values: 0=0°, 1=90°, 2=180°, 3=270° (the
+    editor's UI lists them in clockwise rotation order)."""
+    return {0: 0, 1: 90, 2: 180, 3: 270}.get(guidire & 3, 0)
