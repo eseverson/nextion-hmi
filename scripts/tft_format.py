@@ -165,6 +165,58 @@ def extract_page_bco(data: bytes) -> int | None:
     return bco
 
 
+def extract_xfloat_records(data: bytes) -> list[dict]:
+    """Decode the leading run of XFloat records from the per-component
+    records region.
+
+    The region starts at the first `de ff 01 01` after `strdataaddr`
+    (pco/sta/font signature) and runs until the text-slot region. Each
+    XFloat record is 24 bytes:
+
+    +0   bco (u16)
+    +2   pco (u16)
+    +4   sta (u8)
+    +5   font (u8)
+    +6   val (u32)
+    +10  ... 14 bytes of additional fields (movex/movey/maxval/etc.)
+
+    Other component types (ProgressBar=32B, etc.) live in the same
+    region with different record sizes; this function walks the leading
+    run of consecutive 24-byte records that start with the expected
+    `<bco> <pco> 01 01` shape, stopping at the first record that
+    doesn't match. So for `source/nextion.hmi.tft` it returns the six
+    XFloats (x0..x5) before j0 cleanly. Per-type dispatch for the rest
+    is a follow-up.
+    """
+    from scripts.h2_cipher import encrypt as h2_decrypt
+    if len(data) < H2_END:
+        return []
+    model_crc = struct.unpack_from("<I", data, APPINF0_MODELCRC_OFF)[0]
+    plain = h2_decrypt(data[H2_START:H2_END], model_crc)
+    strdataaddr = struct.unpack_from("<I", plain, 0x14)[0]
+
+    sig = b"\xde\xff\x01\x01"   # pco=0xffde, sta=1, font=1 — XFloat signature
+    first = data.find(sig, strdataaddr)
+    if first < 0:
+        return []
+    records = []
+    off = first - 2     # bco starts 2 bytes before the signature match
+    while off + 24 <= len(data) - 4:
+        if data[off + 2:off + 6] != sig:
+            break
+        bco = struct.unpack_from("<H", data, off)[0]
+        pco = struct.unpack_from("<H", data, off + 2)[0]
+        sta = data[off + 4]
+        font = data[off + 5]
+        val = struct.unpack_from("<I", data, off + 6)[0]
+        records.append({
+            "bco": bco, "pco": pco, "sta": sta, "font": font, "val": val,
+            "_off": off,
+        })
+        off += 24
+    return records
+
+
 def extract_variable_vals(data: bytes, n_variables: int) -> list[int]:
     """Pull Variable component `val` values out of the TFT's flat data
     region.

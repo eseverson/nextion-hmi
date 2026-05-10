@@ -127,6 +127,15 @@ def _extract_variable_vals(data: bytes, n_variables: int) -> list[int]:
     return extract_variable_vals(data, n_variables)
 
 
+def _extract_xfloat_records(data: bytes) -> list[dict]:
+    import sys as _sys
+    repo_root = Path(__file__).resolve().parents[1]
+    if str(repo_root) not in _sys.path:
+        _sys.path.insert(0, str(repo_root))
+    from scripts.tft_format import extract_xfloat_records
+    return extract_xfloat_records(data)
+
+
 def _parse_pages(data: bytes, info: dict) -> list[dict]:
     """Page directory at `pageadd`: 16 bytes per entry (`pagexinxi` struct)."""
     pages = []
@@ -209,6 +218,7 @@ def load_tft(path: str | Path) -> DisplayState:
     n_variables = sum(1 for objs in objs_by_page.values()
                       for o in objs if o["type"] == 52)
     var_vals = _extract_variable_vals(raw, n_variables)
+    xfloat_recs = _extract_xfloat_records(raw)
 
     # Walk all text-bearing components in TFT order and pair them with
     # extracted text slots. Best-effort: assumes the editor emits txt
@@ -227,6 +237,14 @@ def load_tft(path: str | Path) -> DisplayState:
     def _next_val():
         try:
             return next(var_iter)
+        except StopIteration:
+            return None
+
+    xfloat_iter = iter(xfloat_recs)
+
+    def _next_xfloat():
+        try:
+            return next(xfloat_iter)
         except StopIteration:
             return None
 
@@ -263,6 +281,18 @@ def load_tft(path: str | Path) -> DisplayState:
                 v = _next_val()
                 if v is not None:
                     attrs["val"] = v
+            # XFloats (type=59) get bco/pco/sta/font/val from the
+            # per-component records region. Non-XFloat components
+            # break the iteration once we hit them — the records
+            # extractor only walks the leading XFloat run.
+            if o["type"] == 59:
+                rec = _next_xfloat()
+                if rec is not None:
+                    attrs["bco"] = rec["bco"]
+                    attrs["pco"] = rec["pco"]
+                    attrs["sta"] = rec["sta"]
+                    attrs["font"] = rec["font"]
+                    attrs["val"] = rec["val"]
             components.append(Component(
                 name=o["name"], id=o["id"], type=o["type"], attrs=attrs,
                 events={},
