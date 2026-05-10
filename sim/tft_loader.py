@@ -109,6 +109,15 @@ def _extract_text_slots(data: bytes) -> list[tuple[int, str]]:
     return extract_text_slots(data)
 
 
+def _extract_page_bco(data: bytes) -> int | None:
+    import sys as _sys
+    repo_root = Path(__file__).resolve().parents[1]
+    if str(repo_root) not in _sys.path:
+        _sys.path.insert(0, str(repo_root))
+    from scripts.tft_format import extract_page_bco
+    return extract_page_bco(data)
+
+
 def _parse_pages(data: bytes, info: dict) -> list[dict]:
     """Page directory at `pageadd`: 16 bytes per entry (`pagexinxi` struct)."""
     pages = []
@@ -187,6 +196,7 @@ def load_tft(path: str | Path) -> DisplayState:
     # per-component layout. See `_parse_objdata_ram`.
     objs_by_page = _parse_objdata_ram(raw, h1info, page_dir)
     text_slots = _extract_text_slots(raw)
+    page_bco = _extract_page_bco(raw)
 
     # Walk all text-bearing components in TFT order and pair them with
     # extracted text slots. Best-effort: assumes the editor emits txt
@@ -231,14 +241,18 @@ def load_tft(path: str | Path) -> DisplayState:
                 name=o["name"], id=o["id"], type=o["type"], attrs=attrs,
                 events={},
             ))
+        page_attrs = {
+            "objname": name,
+            "w": canvas_w,
+            "h": canvas_h,
+            "sta": 1,   # `1` = use bco (Nextion's default-fill mode)
+        }
+        if page_bco is not None:
+            page_attrs["bco"] = page_bco
         pages[name] = Page(
             name=name,
             id=pid,
-            attrs={
-                "objname": name,
-                "w": canvas_w,
-                "h": canvas_h,
-            },
+            attrs=page_attrs,
             components=components,
             events={},
         )
@@ -312,9 +326,7 @@ def _parse_objdata_ram(data: bytes, info: dict, page_dir: list[dict]) -> dict[in
 
 
 def _orientation_from_guidire(guidire: int) -> int:
-    """Translate the H1 `guidire` byte to a rotation in degrees.
-
-    The HMI loader infers orientation from the *sibling* TFT's H1+0x14
-    using the same byte. Values: 0=0°, 1=90°, 2=180°, 3=270° (the
-    editor's UI lists them in clockwise rotation order)."""
-    return {0: 0, 1: 90, 2: 180, 3: 270}.get(guidire & 3, 0)
+    """Translate the H1 `guidire` byte (file offset 0x14) to a rotation
+    in degrees. Same mapping `scripts/nextion_sim.py` uses when sniffing
+    a sibling TFT for the HMI loader."""
+    return {0x00: 90, 0x01: 0, 0x02: 270, 0x03: 180}.get(guidire & 0xFF, 0)

@@ -100,6 +100,71 @@ def trailing_crc_mask(data: bytes) -> TrailingCrcInfo:
     return TrailingCrcInfo(stored=stored, mask=stored ^ body)
 
 
+def extract_page_bco(data: bytes) -> int | None:
+    """Heuristically pick the page background colour (RGB565 bco) from
+    the TFT's flat data region.
+
+    The "color records" — between the per-object init bytecode and the
+    text-slot region — are 24-byte slots with bco at offset 0 and pco
+    at offset 2 of each slot. In practice every project we've tested
+    has all components on a page using the same bco (the page default),
+    so the most-frequent 16-bit color value in that region is the page
+    bco. Returns None if the region can't be located.
+    """
+    from scripts.h2_cipher import encrypt as h2_decrypt
+    if len(data) < H2_END:
+        return None
+    model_crc = struct.unpack_from("<I", data, APPINF0_MODELCRC_OFF)[0]
+    plain = h2_decrypt(data[H2_START:H2_END], model_crc)
+    strdataaddr = struct.unpack_from("<I", plain, 0x14)[0]
+
+    # Locate the text-slot region (`01 01 00 <ASCII>` markers); the
+    # color region ends just before it.
+    n = len(data) - 4
+    text_region_start = None
+    for i in range(strdataaddr, n - 4):
+        if (data[i:i + 3] == b"\x01\x01\x00"
+                and 32 <= data[i + 3] < 127 and data[i + 4] != 0):
+            text_region_start = i
+            break
+    if text_region_start is None:
+        return None
+
+    # Walk back to find the start of the color region: a contiguous run
+    # of 0xff bytes (≥16) marks the boundary between init bytecode and
+    # color records.
+    colors_start = strdataaddr
+    i = text_region_start - 16
+    while i > strdataaddr:
+        if data[i:i + 16] == b"\xff" * 16:
+            # Skip to the end of the 0xff run.
+            j = i + 16
+            while j < n and data[j] == 0xff:
+                j += 1
+            colors_start = j
+            break
+        i -= 1
+    region = data[colors_start:text_region_start]
+    if len(region) < 6:
+        return None
+
+    # Tally u16 LE values that appear at "looks like a bco position":
+    # bytes preceded by `01 ?? 00 00` or followed by another u16 + `01 01`.
+    # Simpler: just count every u16 in the region and pick the mode.
+    from collections import Counter
+    counts = Counter()
+    for i in range(0, len(region) - 1):
+        v = region[i] | (region[i + 1] << 8)
+        # Ignore obvious non-color values (00 0001, ffff, control bytes).
+        if v in (0x0000, 0xffff, 0x0001, 0x0100, 0x0101):
+            continue
+        counts[v] += 1
+    if not counts:
+        return None
+    bco, _ = counts.most_common(1)[0]
+    return bco
+
+
 def extract_text_slots(data: bytes) -> list[tuple[int, str]]:
     """Heuristically pull `txt` attribute strings out of the TFT body.
 
