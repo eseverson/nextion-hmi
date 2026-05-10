@@ -96,9 +96,10 @@ def align_text(img: Image.Image, draw: ImageDraw.ImageDraw, text: str, font,
     xcen: 0=left 1=center 2=right
     ycen: 0=top  1=center 2=bottom
 
-    Text that overflows the component is clipped on all sides — matches
-    Nextion firmware (centered overflow is trimmed equally left/right,
-    not left-aligned with right cut-off).
+    Nextion firmware behaviour on overflow: text that would otherwise
+    start *before* the component's left/top edge is clamped to the
+    edge — i.e. an overflowing centered/right-aligned string becomes
+    left-/top-aligned. Only the right (and bottom) get clipped.
     """
     x, y, w, h = box
     if w <= 0 or h <= 0:
@@ -117,6 +118,10 @@ def align_text(img: Image.Image, draw: ImageDraw.ImageDraw, text: str, font,
     elif ycen == 2:
         ty = h - th - bbox[1]
     else:
+        ty = -bbox[1]
+    if tw > w:
+        tx = -bbox[0]
+    if th > h:
         ty = -bbox[1]
     clip = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     ImageDraw.Draw(clip).text((tx, ty), text, font=font, fill=fill)
@@ -162,10 +167,13 @@ def draw_zi_text(
         ty = h - th
     else:
         ty = 0
-    # Compose into a clip the size of the component so glyph overflow is
-    # trimmed equally on all sides (Nextion firmware clips text to the
-    # widget bounds — centered overflow is cut from both edges, not just
-    # the right).
+    # Nextion clamps text to the component's left/top edge when it
+    # overflows — overflowing text becomes left-/top-aligned and only
+    # the right/bottom get cut. (Matches firmware: see align_text.)
+    if tw > w:
+        tx = 0
+    if th > h:
+        ty = 0
     clip = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     rgba_fill = fill if len(fill) == 4 else fill + (255,)
     cursor = tx
