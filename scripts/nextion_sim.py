@@ -124,4 +124,10 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        # Belt-and-braces: app.run() now handles SIGINT cleanly, but if a
+        # Ctrl+C lands during startup (before mainloop) we don't want a
+        # raw traceback either.
+        raise SystemExit(130)
