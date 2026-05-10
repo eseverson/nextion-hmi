@@ -79,6 +79,11 @@ class DisplayState:
     # of the .zi filename — e.g. `0.zi` => 0). Empty when fonts couldn't be
     # parsed; renderer falls back to a TTF substitute in that case.
     fonts: dict = field(default_factory=dict)
+    # Pictures keyed by picture id (matches the `pic` attribute on Picture
+    # components). Each value is a PIL.Image in 'RGB' mode at the picture's
+    # native dimensions. Renderer composites these onto the canvas at the
+    # component's x/y. Empty when no pictures or extraction failed.
+    pictures: dict = field(default_factory=dict)
     # Display orientation in degrees (0/90/180/270). Mirrors the TFT's
     # `ui_orientation` byte (H1+0x14). 180° is applied at render time as a
     # post-rotation; 90/270 swap canvas dimensions and rebake at render too.

@@ -25,6 +25,7 @@ T_SLIDER = 1
 T_HOTSPOT = 109
 T_TIMER = 51
 T_CHECKBOX = 56
+T_PICTURE = 112
 
 INVISIBLE_TYPES = {T_VARIABLE, T_HOTSPOT, T_TIMER}
 
@@ -208,8 +209,10 @@ def _draw_text(
     align_text(draw, text, ttf, box, xcen, ycen, fill)
 
 
-def render_component(img: Image.Image, draw: ImageDraw.ImageDraw, c, page_bg, fonts: dict | None = None):
+def render_component(img: Image.Image, draw: ImageDraw.ImageDraw, c, page_bg,
+                     fonts: dict | None = None, pictures: dict | None = None):
     fonts = fonts or {}
+    pictures = pictures or {}
     a = c.rawData["att"]
     t = a.get("type")
     if t in INVISIBLE_TYPES:
@@ -283,6 +286,24 @@ def render_component(img: Image.Image, draw: ImageDraw.ImageDraw, c, page_bg, fo
             draw.line([cx, cy, ex, ey], fill=pco, width=3)
         return
 
+    if t == T_PICTURE:
+        # Composite the source bitmap at (x, y). Picture's `pic` attr
+        # references the picture id; the image is sized at its native
+        # dimensions (which match the component's w/h by convention).
+        pic_id = a.get("pic")
+        pic_img = pictures.get(pic_id) if isinstance(pic_id, int) else None
+        if pic_img is not None:
+            # Match the component box: paste at x,y, cropping/resizing
+            # if dimensions differ.
+            if pic_img.size != (w, h):
+                pic_img = pic_img.resize((w, h))
+            img.paste(pic_img, (x, y))
+        else:
+            # No picture data available — outline placeholder.
+            draw.rectangle([x, y, x + w - 1, y + h - 1],
+                           outline=(160, 160, 160))
+        return
+
     if t == T_SLIDER:
         # Track + handle
         track_y = y + h // 2 - 2
@@ -321,12 +342,13 @@ class Renderer:
         img = Image.new("RGB", (w, h), bg)
         draw = ImageDraw.Draw(img)
         fonts = getattr(state, "fonts", {}) or {}
+        pictures = getattr(state, "pictures", {}) or {}
         # Render in id order (matches Nextion paint order)
         for c in sorted(page.components, key=lambda c: c.attrs.get("id", 0)):
             # Adapt: render_component expects a Nextion2Text-style component
             # with c.rawData["att"]. Build a tiny shim.
             shim = type("Shim", (), {"rawData": {"att": c.attrs}})()
-            render_component(img, draw, shim, bg, fonts)
+            render_component(img, draw, shim, bg, fonts, pictures)
         # Composite the per-page draw overlay (filled by `fill`/`xstr`/etc.
         # primitives invoked from event scripts). Nextion paints these on
         # top of static components.

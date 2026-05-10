@@ -367,6 +367,66 @@ def extract_variable_vals(data: bytes, n_variables: int) -> list[int]:
     return out
 
 
+def extract_pictures(data: bytes) -> dict[int, "Image.Image"]:
+    """Extract embedded pictures from the TFT.
+
+    Each picture has a 24-byte `Picturexinxi` index record at
+    `appinf1.picxinxiadd`. After the records, the actual RGB565 pixel
+    data follows immediately, with each picture's data starting at
+    `picxinxiadd + record.dataaddr`. Layout per record:
+
+        +0   qumo (u8)         +1  quality (u8)
+        +2   alphaen (u8)      +3  picdatatype (u8)
+        +4   pictureid (u16)
+        +6   encodeen (u8)     +7  res1 (u8)
+        +8   dataaddr (u32)    — offset from picxinxiadd to pixel data
+        +12  W (u16)           +14 H (u16)
+        +16  imgbytesize (u32)
+        +20  alphaaddr (i32)   — alpha mask offset (0 if not used)
+
+    Pictures are stored as raw RGB565 little-endian, no compression.
+    Returns a dict {pictureid → PIL.Image RGB} keyed by picture id.
+    """
+    from scripts.h2_cipher import encrypt as h2_decrypt
+    from PIL import Image
+    if len(data) < H2_END:
+        return {}
+    model_crc = struct.unpack_from("<I", data, APPINF0_MODELCRC_OFF)[0]
+    plain = h2_decrypt(data[H2_START:H2_END], model_crc)
+    picxinxiadd = struct.unpack_from("<I", plain, 0x20)[0]
+    picqyt = struct.unpack_from("<H", plain, 0x3c)[0]
+    if picxinxiadd == 0 or picqyt == 0:
+        return {}
+
+    pictures = {}
+    for n in range(picqyt):
+        rec_off = picxinxiadd + n * 24
+        if rec_off + 24 > len(data):
+            break
+        pictureid = struct.unpack_from("<H", data, rec_off + 4)[0]
+        dataaddr = struct.unpack_from("<I", data, rec_off + 8)[0]
+        W = struct.unpack_from("<H", data, rec_off + 12)[0]
+        H = struct.unpack_from("<H", data, rec_off + 14)[0]
+        if W == 0 or H == 0:
+            continue
+        pixel_off = picxinxiadd + dataaddr
+        n_bytes = W * H * 2
+        if pixel_off + n_bytes > len(data):
+            continue
+        # Decode RGB565 LE → RGB888
+        img = Image.new("RGB", (W, H))
+        pixels = []
+        for i in range(0, n_bytes, 2):
+            px = struct.unpack_from("<H", data, pixel_off + i)[0]
+            r = ((px >> 11) & 0x1f) * 255 // 31
+            g = ((px >> 5) & 0x3f) * 255 // 63
+            b = (px & 0x1f) * 255 // 31
+            pixels.append((r, g, b))
+        img.putdata(pixels)
+        pictures[pictureid] = img
+    return pictures
+
+
 def extract_zi_fonts(data: bytes) -> dict[int, "ZiFont"]:
     """Extract embedded ZI fonts from the TFT.
 

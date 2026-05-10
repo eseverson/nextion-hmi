@@ -172,6 +172,15 @@ def _extract_zi_fonts(data: bytes) -> dict:
     return extract_zi_fonts(data)
 
 
+def _extract_pictures(data: bytes) -> dict:
+    import sys as _sys
+    repo_root = Path(__file__).resolve().parents[1]
+    if str(repo_root) not in _sys.path:
+        _sys.path.insert(0, str(repo_root))
+    from scripts.tft_format import extract_pictures
+    return extract_pictures(data)
+
+
 def _parse_pages(data: bytes, info: dict) -> list[dict]:
     """Page directory at `pageadd`: 16 bytes per entry (`pagexinxi` struct)."""
     pages = []
@@ -368,6 +377,14 @@ def load_tft(path: str | Path) -> DisplayState:
                     # Keep `sta=1` (paint background); ProgressBar
                     # extraction's sta byte doesn't always agree with HMI.
                     attrs["sta"] = 1
+            # Picture (type=112): the actual image lives in
+            # state.pictures[pic]; we just need the `pic` attribute on
+            # the component. The Picturexinxi records run in pictureid
+            # order at picxinxiadd, so a given pictureid is found by
+            # iteration. For now, assume a single Picture component
+            # uses pictureid=0 (matching the editor default).
+            if o["type"] == 112:
+                attrs.setdefault("pic", 0)
             # Slider (type=1) records sit in a per-page records region.
             if o["type"] == 1:
                 rec = _next_slider()
@@ -404,6 +421,9 @@ def load_tft(path: str | Path) -> DisplayState:
     # zimoxinxiadd, then name + glyph data following). Renderer uses
     # these via state.fonts; missing fonts fall back to TTF.
     state.fonts = _extract_zi_fonts(raw)
+    # Extract embedded pictures (RGB565 pixel data after each
+    # Picturexinxi index record at picxinxiadd).
+    state.pictures = _extract_pictures(raw)
     return state
 
 
