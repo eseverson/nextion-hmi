@@ -76,7 +76,29 @@ def main() -> int:
     state = load_hmi(args.hmi)
     if args.start_page and args.start_page in state.pages:
         state.active_page = state.pages[args.start_page]
-    state.orientation = args.orientation
+
+    # Resolve orientation: explicit --orientation wins; otherwise auto-detect
+    # from a sibling .tft (same stem). The TFT's H1+0x14 byte encodes
+    # orientation per finding G10/N: 0x01=0° / 0x00=90° / 0x03=180° / 0x02=270°.
+    if args.orientation:
+        state.orientation = args.orientation
+    else:
+        tft_path = Path(args.hmi).with_suffix(".tft")
+        if not tft_path.exists():
+            # also try the original lowercase
+            tft_path = Path(str(args.hmi).removesuffix(".HMI") + ".tft")
+        if tft_path.exists():
+            try:
+                with open(tft_path, "rb") as f:
+                    f.seek(0x14)
+                    o_byte = f.read(1)[0]
+                state.orientation = {0x00: 90, 0x01: 0, 0x02: 270, 0x03: 180}.get(o_byte, 0)
+                if state.orientation:
+                    print(f"Auto-detected orientation {state.orientation}° from {tft_path.name}",
+                          flush=True)
+            except OSError:
+                pass
+
     transport = _build_transport(args.bind)
     if args.record:
         from sim.recorder import RecordingTransport
