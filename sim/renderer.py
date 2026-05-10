@@ -89,30 +89,38 @@ def font_size_for(font_id: int | None, comp_height: int) -> int:
     return max(8, int(comp_height * 0.7))
 
 
-def align_text(draw: ImageDraw.ImageDraw, text: str, font, box, xcen, ycen,
-               fill):
+def align_text(img: Image.Image, draw: ImageDraw.ImageDraw, text: str, font,
+               box, xcen, ycen, fill):
     """Draw text inside box (x, y, w, h) with horiz/vert alignment.
 
     xcen: 0=left 1=center 2=right
     ycen: 0=top  1=center 2=bottom
+
+    Text that overflows the component is clipped on all sides — matches
+    Nextion firmware (centered overflow is trimmed equally left/right,
+    not left-aligned with right cut-off).
     """
     x, y, w, h = box
+    if w <= 0 or h <= 0:
+        return
     bbox = draw.textbbox((0, 0), text, font=font)
     tw = bbox[2] - bbox[0]
     th = bbox[3] - bbox[1]
     if xcen == 1:
-        tx = x + (w - tw) // 2 - bbox[0]
+        tx = (w - tw) // 2 - bbox[0]
     elif xcen == 2:
-        tx = x + w - tw - bbox[0]
+        tx = w - tw - bbox[0]
     else:
-        tx = x - bbox[0]
+        tx = -bbox[0]
     if ycen == 1:
-        ty = y + (h - th) // 2 - bbox[1]
+        ty = (h - th) // 2 - bbox[1]
     elif ycen == 2:
-        ty = y + h - th - bbox[1]
+        ty = h - th - bbox[1]
     else:
-        ty = y - bbox[1]
-    draw.text((tx, ty), text, font=font, fill=fill)
+        ty = -bbox[1]
+    clip = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    ImageDraw.Draw(clip).text((tx, ty), text, font=font, fill=fill)
+    img.paste(clip, (x, y), clip)
 
 
 def _zi_text_width(font: ZiFont, codepoints: list[int]) -> int:
@@ -137,35 +145,40 @@ def draw_zi_text(
     behaves the same.
     """
     x, y, w, h = box
+    if w <= 0 or h <= 0:
+        return
     cps = font.encode_text(text)
     tw = _zi_text_width(font, cps)
     th = font.height
     if xcen == 1:
-        tx = x + (w - tw) // 2
+        tx = (w - tw) // 2
     elif xcen == 2:
-        tx = x + w - tw
+        tx = w - tw
     else:
-        tx = x
+        tx = 0
     if ycen == 1:
-        ty = y + (h - th) // 2
+        ty = (h - th) // 2
     elif ycen == 2:
-        ty = y + h - th
+        ty = h - th
     else:
-        ty = y
-    # Solid-color L-mode -> RGBA with the component's pco. We composite
-    # each glyph individually so anti-aliased pixels blend with the bg.
+        ty = 0
+    # Compose into a clip the size of the component so glyph overflow is
+    # trimmed equally on all sides (Nextion firmware clips text to the
+    # widget bounds — centered overflow is cut from both edges, not just
+    # the right).
+    clip = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    rgba_fill = fill if len(fill) == 4 else fill + (255,)
     cursor = tx
     for cp in cps:
         gw = font.glyph_width(cp) or font.width or 0
         if gw <= 0:
             continue
         mask = font.glyph_image(cp)
-        # Build a coloured patch the same size as the mask, then paste using
-        # the mask as alpha. img is RGB so we go through the L mask directly.
-        # Pillow's `paste(color, box, mask)` accepts an L-mode mask.
-        img.paste(fill, (cursor, ty, cursor + mask.size[0], ty + mask.size[1]),
-                  mask)
+        clip.paste(rgba_fill,
+                   (cursor, ty, cursor + mask.size[0], ty + mask.size[1]),
+                   mask)
         cursor += gw
+    img.paste(clip, (x, y), clip)
 
 
 def format_xfloat(val: int, vvs0: int, vvs1: int) -> str:
@@ -212,7 +225,7 @@ def _draw_text(
     _, _, _, h = box
     font_pt = font_size_for(font_id, h)
     ttf = load_font(font_pt)
-    align_text(draw, text, ttf, box, xcen, ycen, fill)
+    align_text(img, draw, text, ttf, box, xcen, ycen, fill)
 
 
 def render_component(img: Image.Image, draw: ImageDraw.ImageDraw, c, page_bg,
@@ -422,10 +435,10 @@ def render_component(img: Image.Image, draw: ImageDraw.ImageDraw, c, page_bg,
                 matrix = qr.matrix
                 mw = len(matrix[0])
                 mh = len(matrix)
-                # Reserve ~6% of the smaller side for the quiet zone on
-                # each side (so ~12% total). Clamp to at least 2 px so
-                # tiny boxes still have a visible border.
-                pad = max(2, min(w, h) // 16)
+                # Small quiet zone around the matrix. Roughly 3% of the
+                # smaller side per edge, clamped to 1 px minimum so tiny
+                # QR boxes still get a separator.
+                pad = max(1, min(w, h) // 32)
                 inner_w = max(1, w - 2 * pad)
                 inner_h = max(1, h - 2 * pad)
                 scale = max(1, min(inner_w // mw, inner_h // mh))
@@ -479,7 +492,7 @@ def render_component(img: Image.Image, draw: ImageDraw.ImageDraw, c, page_bg,
     # Fallback: outline + label so unhandled types are visible
     draw.rectangle([x, y, x + w - 1, y + h - 1], outline=(180, 100, 100))
     label = f"<type {t}>"
-    align_text(draw, label, load_font(10), (x, y, w, h), 1, 1, (180, 100, 100))
+    align_text(img, draw, label, load_font(10), (x, y, w, h), 1, 1, (180, 100, 100))
 
 
 class Renderer:

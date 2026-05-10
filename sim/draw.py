@@ -104,5 +104,5 @@ def xstr(state: DisplayState, x: int, y: int, w: int, h: int,
     else:
         font_pt = font_size_for(font_id, h)
         font = load_font(font_pt)
-        align_text(draw, text, font, (x, y, w, h), xcen, ycen, _rgba(pco))
+        align_text(overlay, draw, text, font, (x, y, w, h), xcen, ycen, _rgba(pco))
     state.dirty = True
