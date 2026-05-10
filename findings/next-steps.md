@@ -1,228 +1,210 @@
 # Next steps — toward authoring HMI/TFT from scratch
 
-The end goal is a Linux-native toolchain that can **create** HMI and
-TFT files from scratch (not just patch existing ones). This doc lists
-the remaining work, in priority order, with the specific approach
-for each item.
+Forward-looking work items only. Completed items are not listed here;
+their results live in the format docs and the cross-referenced
+research docs.
 
-## Where we are now
+## 1. Finish the script compiler
 
-**Solved primitives** (re-implementable in any language):
+**Where it stands**: [`scripts/script_compiler.py`](../scripts/script_compiler.py)
+handles assignments, `print`/`printh`, `page N`, system-variable
+writes, and global `int` declarations. Round-trips 8 source→bytecode
+pairs from the project corpus.
 
-- All three CRC layers (page CRC, H1 CRC, file CRC) — see
-  [`format-hmi.md`](format-hmi.md), [`format-tft.md`](format-tft.md).
-- F-series H2 cipher (encrypt + decrypt) — see
-  [`h2-cipher.md`](h2-cipher.md).
-- HMI directory + entry layout, append-only journaling, manifest format.
-- TFT body section layout: resources, fonts, usercode, picture data.
-- ZI font format (v3/v5/v6) — see [`format-zi.md`](format-zi.md).
-- Bytecode opcode set for everything observed in practice — see
-  [`format-bytecode.md`](format-bytecode.md).
-- Component on-disk stride (52 + 180 = 232 bytes on F-series).
-- Coordinate encoding under 90°/180°/270° rotation.
+**What's left**:
 
-**Editing today** is fully working for the well-mapped fields:
-Variable val, Text txt (same-length), bco/pco, ZI font swaps,
-orientation, baud, dim, editor version, file_size adjustments, and
-H2 fields. The in-place patcher
-[`scripts/patch_tft.py`](../scripts/patch_tft.py) handles every CRC
-and the cipher.
+a. **Component-attribute access** (e.g. `dim=h0.val`, `x0.bco=red.val`).
+   These compile to a local-var ref like `01 54 04 00 00` where
+   `0x454` is the frame offset of `h0.val` in the page's local
+   memory. Computing that offset needs a per-page
+   `(component_name, attr_name) → frame_offset` resolver. Trace
+   `appbianyi.mollocmemory_add` (~50 lines of IL in `hmitype.dll`)
+   to recover the allocation rule. See
+   [`script-compiler.md`](script-compiler.md).
 
-## Gaps that block authoring
+b. **Control-flow lowering** for `if`/`while`/`for`/`else`. The editor
+   does this in `appbianyi.chonggouifwhile` — rewrites the structured
+   construct to a flat sequence of `i` (cjmp) + `54 20 …` (jmp) +
+   labels. Encoder needs to compute branch offsets after emitting the
+   target.
 
-The remaining unknowns, in roughly decreasing order of authoring
-impact:
+c. **Multi-operand expressions** (e.g. `x0.val=h0.val+5`). Today only
+   single-RHS-token assignments work. Needs a small expression parser
+   that emits in the canonical Nextion order (recovered from existing
+   compiled examples in the project TFT).
 
-### 1. Component attribute-record value table
+**Why it's first**: gap #2's button-family init templates use `if/else`
+and several Text templates emit multi-step expressions, so the
+init-bytecode encoder can't reach 100% coverage until this lands.
+The script compiler is also the gating dependency for any project that
+has event handlers (which is almost all of them).
 
-**Status**: Per-component init bytecode is disassembled
-([`scripts/tft_bytecode.py`](../scripts/tft_bytecode.py)), but its
-`LOAD` operands reference attribute IDs rather than literal values.
-The flat data region that maps attribute IDs to values is only
-partially decoded — XFloat, Slider, ProgressBar, Variable, Text, and
-Button records are pinpointed; exotic types (Waveform, CropPicture,
-Checkbox, Radio, QRCode, Gauge, DualStateButton, type 113) are not.
+## 2. Finish the per-component init-bytecode encoder
 
-**Why it blocks authoring**: emitting a new component requires
-emitting both the init-script bytecode AND the value-table entries it
-references. Without the value-table format, we can only produce
-components whose attributes happen to fit the per-type fixed records.
+**Where it stands**: [`scripts/tft_init_encoder.py`](../scripts/tft_init_encoder.py)
+round-trips XFloat / QRCode / Picture / Page byte-for-byte. Templates
+extracted for every visible component type.
 
-**Approach**:
+**What's left**:
 
-a. **Experiment-driven**: run the "single-attribute deltas" experiment
-   batch in [`experiments.md`](experiments.md#single-attribute-deltas-for-exotic-component-types).
-   One save per attribute change isolates each attribute's byte
-   position.
+a. **Button-family templates** (Button, DualStateButton, type-3 Hotspot
+   refresh) — these use `if (val==1) { …pressed colours… } else
+   { …released colours… }`. Blocked on the control-flow piece of the
+   script compiler (item 1b).
 
-b. **Disassembly-driven**: locate the editor routine that writes the
-   value table. Candidates: an unmapped subcommand in
-   `achmi.dll`'s 200-entry dispatch table (see
-   [`achmi-internals.md`](achmi-internals.md#what-s-still-to-be-mapped)),
-   or a managed method in `hmitype.dll` (likely in `Myapp_inf` or
-   `appbianyi`, given those are the compile-path entry points).
+b. **Text `setbrush` sub-variant** — when `spax`/`spay` are zero, the
+   editor inlines them as ASCII literals rather than emitting a LOAD
+   operand. Detection logic needed in the encoder.
 
-Both directions in parallel is fine; whichever produces a complete map
-first wins.
+c. **Variable-length attribute references** — strings (`txt`, `path`)
+   and arrays are stored in a separate memory area pointed to by
+   `attmemorypos`. Allocation rule lives in
+   `appbianyi.mollocmemory_add`. Same target as item 1a.
 
-### 2. Per-component init bytecode encoder
+## 3. Build the attribute-record encoder
 
-**Status**: Disassembler exists. No encoder.
+**Where it stands**: [`scripts/tft_attrs.py`](../scripts/tft_attrs.py)
+**decodes** the per-page 24-byte `binattinf` table; per-type attribute
+layouts are documented in
+[`attribute-records.md`](attribute-records.md).
 
-**Why it blocks authoring**: every component on a TFT has an init
-bytecode block that's run once when its page loads. Without an encoder
-we can't produce that block from declared attributes.
+**What's left**: the **encoder** side. Take a list of components with
+their authored attribute values and emit:
 
-**Approach**: Static disassembly of `hmitype.dll` or the relevant
-`achmi.dll` subcommand. Each component type's init block follows a
-predictable opcode-header pattern (see
-[`format-bytecode.md`](format-bytecode.md#per-component-init-bytecode));
-the encoder is a small state machine that emits `LOAD` operands for
-each non-default attribute. Should be 100-200 lines of Python once the
-attribute-record schema (gap #1) is settled.
+- Each page's `allattbytes` (24 bytes per attribute, concatenated).
+- Each component's `Attstrpianyi` (180-byte block on F-series; first
+  4 bytes = byte offset of this component's init bytecode within
+  `strdata`, remainder = u16 indexes back into the page table).
 
-### 3. Event-handler bytecode encoder
+Writer chain in `hmitype.dll` is mapped already
+([`attribute-records.md`](attribute-records.md)) — this is a
+mechanical translation of `mpage.Allattbytes_set` + `mobj.attpianyiset`
+to Python.
 
-**Status**: Disassembly via TFTTool's tables works (with the
-nxt-1.67.1 instruction set added). No encoder exists.
+## 4. Global memory directory writer
 
-**Why it blocks authoring**: any `codesup` / `codesdown` / `codestimer`
-/ `codesload` handler needs to be compiled to bytecode. Authoring a
-project without scripts is barely useful.
+**Where it stands**: First u32 of the usercode region is the directory
+size in bytes; subsequent u32s are `(offset, size)` or `(offset, count)`
+tuples. Adding a single `int` local grows the directory by 4 bytes and
+shifts two internal pointer fields by +4 (one observation).
 
-**Approach**: This is essentially a small compiler for the Nextion
-script language. The grammar is well-documented in
-[`tools/nxt-doc`](../tools/nxt-doc); the bytecode encoding is fully
-mapped in [`format-bytecode.md`](format-bytecode.md). Build the
-parser + emitter. Cross-validate against round-tripped TFTs from the
-editor.
+**What's left**: Pin down the layout with either:
 
-Useful experimental cross-checks live in
-[`experiments.md`](experiments.md#event-handler-bytecode-probes) for
-opcodes the current corpus doesn't exercise.
+- **Disassembly path**: trace `appbianyi.mollocmemory_add` in
+  `hmitype.dll`. Same routine flagged by items 1a and 2c, so this work
+  benefits all three. Expected ~50 lines of IL.
+- **Experiment path**: save 5 small projects with progressively more
+  local-int declarations (0, 1, 2, 3, 5 locals) and inspect the
+  directory growth pattern byte-by-byte.
 
-### 4. Global memory directory writer
+The disassembly path is preferred — three other items already need
+the same routine read.
 
-**Status**: Partially mapped per
-[`format-tft.md`](format-tft.md#usercode-section-0x70000file_size--4)
-— first u32 is the directory size in bytes, subsequent u32s look like
-`(offset, size)` or `(offset, count)` tuples. The "add a local int"
-experiment showed that declaring a new variable adds one slot and
-shifts two internal pointer fields by +4.
+## 5. `appinf1` (H2) population
 
-**Why it blocks authoring**: a TFT without this directory at usercode
-offset 0 will not load. Even an empty project has one (size 0x48).
+**Where it stands**: Schema is fully decoded
+([`format-tft.md`](format-tft.md#header-2-appinf1-196-bytes-encrypted)
+with corrections from [`attribute-records.md`](attribute-records.md));
+encrypt/decrypt round-trips losslessly via
+[`scripts/h2_cipher.py`](../scripts/h2_cipher.py).
 
-**Approach**: Run a short series of experiments adding one local int
-at a time (1, 2, 3, 4 vars) and observe the directory's growth
-pattern in detail. With 4-5 data points the layout should fall out
-trivially. Alternatively, find the writer in `hmitype.dll`'s
-`appbianyi` path — likely a 50-line managed method.
+**What's left**:
 
-### 5. `appinf1` (H2) population
+a. **Compute every address/count from body content** — a mechanical
+   pass once all the sub-section sizes are known (pages, components,
+   pictures, fonts, etc.). Implement as a single
+   `compute_appinf1(body_layout) -> bytes` helper.
 
-**Status**: All 12 address fields decode correctly. F-series count
-field positions are pinned for `pageqyt`/`pictureqyt`/etc. The 120-byte
-trailing region at `H2[0x114..0x18c]` decrypts to plausibly-structured
-data, partly mapped as 4×32-byte rows.
+b. **Trailing 120 bytes** (`H2[0x114..0x18c]`) — four ~32-byte rows
+   that decrypt to plausibly-structured data. Either:
+   - Run the `23_minimal_project` experiment from
+     [`experiments.md`](experiments.md#stable-region-decode-advances-h2-trailing-region)
+     to isolate per-component vs. per-page rows.
+   - Find the writer in `appbianyi` and decode directly.
 
-**Why it matters for authoring**: producing a valid H2 means computing
-every address and count from the body content and writing the trailing
-fingerprint rows.
+## 6. `main.HMI` manifest writer
 
-**Approach**: The address/count computations are mechanical given the
-body layout. The trailing rows need either the minimal-project
-experiment in [`experiments.md`](experiments.md#stable-region-decode-advances-h2-trailing-region)
-or the `appbianyi` writer disassembly.
-
-### 6. `main.HMI` manifest writer
-
-**Status**: Layout is mapped per
+**Where it stands**: Top-level layout is mapped per
 [`format-hmi.md`](format-hmi.md#mainhmi-blob-project-manifest). Three
 unknowns remain in bytes `0x0C..0x60` (per-display config).
 
-**Why it matters for authoring**: every HMI needs a `main.HMI` blob,
-or the editor (and likely the device) will reject the file.
+**What's left**: Per-display config is model-specific. For a
+single-model toolchain, copy the bytes verbatim from a known-good file
+of the same model — that's enough to produce valid output. A
+model-agnostic toolchain needs:
 
-**Approach**: The per-display config is model-specific. For a
-single-model toolchain, copying the bytes verbatim from a known-good
-file of the same model is sufficient. A model-agnostic toolchain would
-need either physical hardware variety (blocked) or the disassembled
-config table from `hmitype.dll`'s model registry.
+- **Disassembly path**: find the config table in `hmitype.dll`'s model
+  registry. Almost certainly a switch/dictionary keyed by `model_crc`.
+- **Hardware path**: collect HMIs from a second model and diff against
+  the existing one. Blocked on physical hardware variety.
 
-### 7. Tombstone/compaction policy
+## 7. End-to-end author CLI
 
-**Status**: Tombstone retention is confirmed (append-only journal).
-Compaction trigger is partially understood: it happens occasionally
-(once in 6 saves with no content) but the exact rule is unknown.
+**Where it stands**: All the individual encoders exist as research
+scripts. Nothing stitches them together.
 
-**Why it matters for authoring**: a from-scratch writer can simply
-never emit tombstones (start with the live entries only). So this is
-*not* a blocker for the first version of an authoring tool — only for
-a writer that round-trips edits while preserving history. Leave for
-later.
+**What's left**:
+
+- A `scripts/author_tft.py` (and matching `author_hmi.py`) that takes
+  a project description (pages, components, scripts, fonts, pictures)
+  and emits a valid `.tft`+`.HMI` pair.
+- A round-trip validator: re-author a known editor output and diff
+  against the original byte-for-byte. Tolerance only for fields the
+  editor itself non-deterministically populates (none today; saves are
+  deterministic — see
+  [`format-hmi.md`](format-hmi.md#append-only-journal)).
+- Eventually a higher-level project format (YAML/JSON) so users don't
+  hand-author the intermediate representation.
 
 ## Recommended order of attack
 
-Highest-leverage path:
+1. **Disassemble `appbianyi.mollocmemory_add`** in `hmitype.dll`. One
+   read unblocks items 1a, 2c, 4. Expected: a couple hours.
+2. **Finish the script compiler** (items 1b, 1c) — needed by the
+   button-family init templates and by all non-trivial event handlers.
+3. **Finish the init-bytecode encoder** (items 2a, 2b) — completes
+   per-component coverage.
+4. **Build the attribute-record encoder** (item 3) — the last
+   per-component piece; mechanical translation of the already-mapped
+   writer chain.
+5. **Global memory directory writer** (item 4) — small, but blocking
+   for any authored TFT.
+6. **`appinf1` population helper** (item 5a) — mechanical.
+7. **First authored TFT**: empty project, one blank page. Round-trip
+   validate. This is the milestone where the pipeline first produces
+   a device-loadable file from scratch.
+8. **Trailing `H2[0x114..0x18c]` rows** (item 5b) — needed for any
+   project beyond the minimal case.
+9. **`main.HMI` for the single-model case** (item 6) — copy-bytes path.
+10. **`author_tft.py` / `author_hmi.py` glue** (item 7).
 
-1. **Run the "single-attribute deltas" experiment batch** (gap #1).
-   Cheap (editor saves only) and unblocks both the value-table
-   encoder and the disassembler's value resolution.
-2. **In parallel, disassemble `achmi.dll` subcommands** that haven't
-   been mapped yet, specifically looking for the value-table writer.
-   Cross-check against experimental results from step 1.
-3. **Write the per-component init bytecode encoder** (gap #2) using
-   the value table from step 1+2.
-4. **Write the global memory directory experiment series and decode**
-   (gap #4). Small effort, unblocks the simplest possible authored
-   project (one page, no components, no scripts).
-5. **At this point a "trivial authored TFT" is achievable**: empty
-   project with one blank page, valid CRCs, valid H2, valid memory
-   directory. Validates the toolchain end-to-end before tackling
-   scripts.
-6. **Write the event-handler bytecode encoder** (gap #3). Largest
-   single piece of code but well-specified by the existing opcode
-   tables.
-7. **Wire it all into a writer** alongside the existing reader.
+## Disassembly vs. experiment
 
-After step 5 we have a minimal working authoring pipeline; steps 6-7
-fill in the expressive features.
+For the remaining items:
 
-## Disassembly vs. experiment — which fits where
+| Item                                  | Best attack                          |
+|---------------------------------------|--------------------------------------|
+| 1a Component-attribute resolver       | Disassembly (`mollocmemory_add`)     |
+| 1b Control-flow lowering              | Disassembly (`chonggouifwhile`)      |
+| 1c Multi-operand expressions          | Disassembly + corpus cross-check     |
+| 2a Button-family init templates       | Blocked on 1b                        |
+| 2b Text `setbrush` sub-variant        | Disassembly + corpus cross-check     |
+| 3 Attribute-record encoder            | Disassembly (writer chain mapped)    |
+| 4 Global memory directory             | Disassembly (`mollocmemory_add`)     |
+| 5a `appinf1` address/count compute    | Mechanical, given body layout        |
+| 5b H2 trailing rows                   | Experiment first, disasm to verify   |
+| 6 `main.HMI` per-display config       | Copy bytes; disasm for multi-model   |
+| 7 End-to-end CLI                      | Implementation only                  |
 
-For each remaining gap, the more efficient attack is:
+**Item 1 (`mollocmemory_add`) is the highest-leverage single read** —
+it unblocks the script compiler's remaining work, the init-encoder's
+variable-length attributes, and the global memory directory writer in
+one pass.
 
-| Gap                                | Best attack                          |
-|------------------------------------|--------------------------------------|
-| Attribute-record value table       | Experiments first, disasm to verify  |
-| Init-bytecode encoder              | Disassembly                          |
-| Event-handler encoder              | Disassembly + table replication      |
-| Global memory directory writer     | Experiments (cheap data points)      |
-| `appinf1` trailing fingerprint     | Experiments (minimal project)        |
-| `main.HMI` per-display config      | Copy bytes; disasm for multi-model   |
-| Tombstone policy                   | Not on authoring path                |
+## Out of scope
 
-The pattern: **experiments are efficient for small, well-localised
-unknowns** where one save isolates the unknown to a few bytes.
-**Disassembly is efficient for encoders** — routines that read inputs
-from many places and emit a single output blob, which experiments
-can't reverse-engineer in finite time.
-
-## What gets shipped along the way
-
-Each step produces a reusable artifact:
-
-- Step 1: completed [`experiments.md`](experiments.md) with attribute
-  byte positions tabulated in [`format-tft.md`](format-tft.md).
-- Step 2: completed [`achmi-internals.md`](achmi-internals.md) with
-  more dispatch entries mapped.
-- Step 3: new `scripts/tft_bytecode_encoder.py`.
-- Step 4: new `scripts/global_memory_directory.py`.
-- Step 5: new `scripts/author_tft.py` for the empty-project case.
-- Step 6: new `scripts/script_compiler.py`.
-- Step 7: end-to-end `nxt-author` CLI.
-
-Each step's output validates against round-tripping a known editor
-output. The simulator already exists and can be used as the rendering
-oracle for any authored file before flashing to hardware.
+- **Tombstone/compaction policy** — a from-scratch writer can simply
+  never emit tombstones. Only matters for a writer that round-trips
+  edits while preserving editor undo history.
+- **Multi-model `main.HMI` config table** — needs physical access to
+  additional display models, blocked.
