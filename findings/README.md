@@ -25,6 +25,26 @@ the F-series device runtime.
   `achmi.dll` is unpacked, plus the 200-entry dispatch table that
   contains the file-format primitives.
 
+## Authoring research
+
+Reverse-engineering deliverables for the three encoder gaps from
+[`next-steps.md`](next-steps.md):
+
+- [`attribute-records.md`](attribute-records.md) — per-page 24-byte
+  attribute-record table (`binattinf`). Documents the writer routine in
+  `hmitype.dll`, the per-type attribute lists, and the bit-packed
+  type/length/flags field. Decoder:
+  [`scripts/tft_attrs.py`](../scripts/tft_attrs.py).
+- [`init-bytecode-encoder.md`](init-bytecode-encoder.md) — per-component
+  init bytecode emitter, derived from the editor's per-type Nextion
+  script templates. Encoder:
+  [`scripts/tft_init_encoder.py`](../scripts/tft_init_encoder.py),
+  round-trips against XFloat / QRCode / Picture / Page fixtures.
+- [`script-compiler.md`](script-compiler.md) — event-handler script
+  compiler, located in `hmitype.appbianyi`. Minimal compiler:
+  [`scripts/script_compiler.py`](../scripts/script_compiler.py),
+  round-trips 8 source→bytecode pairs from the project corpus.
+
 ## Roadmap
 
 - [`experiments.md`](experiments.md) — Every editor experiment,

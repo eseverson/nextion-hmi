@@ -68,32 +68,48 @@ Notable fields:
 
 ## Header 2 (`appinf1`, 196 bytes encrypted)
 
-The encrypted region is 196 bytes long (H2 + 120 trailing bytes); only
-the first 76 bytes are the `appinf1` struct. After decryption:
+The encrypted region is 196 bytes long; the `appinf1` struct itself is
+76 bytes (`= 0x4c`). After decryption, layout per `hmitype.dll!appinf1`:
 
 ```
-+0x00   u32   static_usercode_address
-+0x04   u32   app_attributes_data_address
-+0x08   u32   ressources_files_address      (always 0x10000)
-+0x0C   u32   usercode_address              (always 0x70000)
-+0x10   u32   unknown_pages_address
-+0x14   u32   unknown_objects_address
-+0x18   u32   pictures_address              (sentinel when count=0)
-+0x1C   u32   gmovs_address                 (sentinel when count=0)
-+0x20   u32   videos_address                (0 when count=0)
-+0x24   u32   audios_address                (0 when count=0)
-+0x28   u32   fonts_address
-+0x2C   u32   ...
-+0x30..0x3C   counts (pageqyt, objqyt, picqyt, gmovqyt, videoqyt, audioqyt, zimoqyt, ...)
-+0x40..0xC4   per-project fingerprint records (4 × 32-byte rows, partly
-              decoded — see [`achmi-internals.md`](achmi-internals.md))
++0x00   u32   staticstrBeg              (start of static-string region)
++0x04   u32   AppAllvasAddr             (global variables address)
++0x08   u32   AppAllvasQty              (global variables count)
++0x0c   u32   attdataaddr               (page-attribute records region)
++0x10   u32   resourcesfileddr          (=0x10000)
++0x14   u32   strdataaddr               (=0x80000)
++0x18   u32   pageadd                   (per-page xinxi records)
++0x1c   u32   objxinxiadd               (per-component xinxi records)
++0x20   u32   picxinxiadd               (picture records)
++0x24   u32   gmovxinxiadd
++0x28   u32   videoxinxiadd
++0x2c   u32   wavxinxiadd
++0x30   u32   zimoxinxiadd              (ZI font records)
++0x34   u32   MainCodeHex               (main-code hash)
++0x38   u16   pageqyt
++0x3a   u16   objqyt
++0x3c   u16   picqyt
++0x3e   u16   gmovqyt
++0x40   u16   videoqyt
++0x42   u16   wavqyt
++0x44   u16   zimoqyt
++0x46   u16   res1
++0x48   u8    encode
++0x49   u8    res2
++0x4a   u16   res3
 ```
 
-The exact F-series layout of the count fields (positions `0x30..0x3F`)
-differs from TFTTool's T0/K0 schema (`pictures_count` is at H2+0x3a on
-F-series, not H2+0x34). The decoder in
-[`scripts/h2_cipher.py`](../scripts/h2_cipher.py) returns the verified
-F-series struct.
+The trailing 120 bytes (`H2[0x114..0x18c]`) past the struct are
+project-specific fingerprint data covered by the same CRC. They
+decrypt to plausibly-structured content; partial decoding is in
+[`h2-cipher.md`](h2-cipher.md).
+
+Earlier writeups labelled the address fields with TFTTool's T0/K0 names
+(`pictures_address` etc.) and put counts at `0x30..0x3F` as u32 fields;
+that's wrong on F-series — counts are u16 starting at `+0x38` and the
+address slots above are distinct. Source of truth is
+`hmitype.dll!appinf1` as decompiled in
+[`achmi-internals.md`](achmi-internals.md).
 
 H2 encryption details and the cipher implementation live in
 [`h2-cipher.md`](h2-cipher.md). H2 is fully decryptable and
