@@ -68,6 +68,38 @@ def test_load_tft_alone_recovers_components(tft_path, tmp_path):
             assert c.attrs["w"] > 0 and c.attrs["h"] > 0
 
 
+def test_load_tft_alone_recovers_text_values(tft_path, tmp_path):
+    """The TFT-only loader heuristically pulls `txt` values from the
+    flat string region. For source/nextion.hmi.tft this should give us
+    every visible text on every page (10 main-page texts + 2 on
+    settings)."""
+    standalone = tmp_path / "alone.tft"
+    standalone.write_bytes(tft_path.read_bytes())
+    state = load_tft(standalone)
+
+    from sim.loader import load_hmi
+    hmi_state = load_hmi(tft_path.with_suffix(".HMI"))
+
+    # Aggregate all txt values from both loaders. The TFT side won't
+    # have 'newtxt' (Variable defaults the editor doesn't write).
+    def texts(state):
+        return sorted(
+            c.attrs["txt"]
+            for p in state.pages.values()
+            for c in p.components
+            if c.attrs.get("txt") and c.attrs["txt"] != "newtxt"
+        )
+
+    tft_texts = texts(state)
+    hmi_texts = texts(hmi_state)
+    # The HMI has the canonical txt values; the TFT-only loader's
+    # heuristic should recover the *same set* of strings.
+    assert tft_texts == hmi_texts, (
+        f"TFT-only loader should recover the same visible-text set as HMI:\n"
+        f"  HMI: {hmi_texts}\n  TFT: {tft_texts}"
+    )
+
+
 def test_load_tft_alone_matches_hmi_geometry(tft_path, tmp_path):
     """Component types and bounding boxes from the TFT-only path should
     match what the HMI loader produces — across all pages combined.

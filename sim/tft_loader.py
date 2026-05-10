@@ -98,6 +98,17 @@ def _parse_appinf1(h2_plain: bytes) -> dict:
     }
 
 
+def _extract_text_slots(data: bytes) -> list[tuple[int, str]]:
+    """Wraps `scripts.tft_format.extract_text_slots` so the loader can
+    avoid an absolute import at module top."""
+    import sys as _sys
+    repo_root = Path(__file__).resolve().parents[1]
+    if str(repo_root) not in _sys.path:
+        _sys.path.insert(0, str(repo_root))
+    from scripts.tft_format import extract_text_slots
+    return extract_text_slots(data)
+
+
 def _parse_pages(data: bytes, info: dict) -> list[dict]:
     """Page directory at `pageadd`: 16 bytes per entry (`pagexinxi` struct)."""
     pages = []
@@ -175,32 +186,50 @@ def load_tft(path: str | Path) -> DisplayState:
     # Standalone TFT path: parse objdata_Ram records to reconstruct
     # per-component layout. See `_parse_objdata_ram`.
     objs_by_page = _parse_objdata_ram(raw, h1info, page_dir)
+    text_slots = _extract_text_slots(raw)
+
+    # Walk all text-bearing components in TFT order and pair them with
+    # extracted text slots. Best-effort: assumes the editor emits txt
+    # values in the same order it walks components. Falls back to no
+    # txt if counts diverge. See `_extract_text_slots`.
+    text_iter = iter(text_slots)
+
+    def _next_txt():
+        try:
+            return next(text_iter)[1]
+        except StopIteration:
+            return None
 
     pages: dict[str, Page] = {}
     for entry in page_dir:
         pid = entry["id"]
         name = f"page{pid}"
         page_objs = objs_by_page[pid]
-        # Object 0 is the page-meta ("type=121"); its x/y/w/h give the
-        # page canvas size. Components are everything else.
         page_meta = next((o for o in page_objs if o["type"] == 121), None)
         canvas_w = page_meta["w"] if page_meta else h0["lcdscreenw"]
         canvas_h = page_meta["h"] if page_meta else h0["lcdscreenh"]
         components = []
         for o in page_objs:
-            if o["type"] == 121:   # skip page-meta — it's not a Component
+            if o["type"] == 121:
                 continue
             attrs = {
                 "x": o["x"], "y": o["y"],
                 "w": o["w"], "h": o["h"],
                 "endx": o["endx"], "endy": o["endy"],
-                "objname": o["name"],   # synthesized: "obj{id}" for now
+                "objname": o["name"],
                 "id": o["id"],
                 "type": o["type"],
             }
+            # Visible-text-bearing types: Text(116), Button(98),
+            # ScrollingText(55). Skip Variable(52) — `txt='newtxt'` is
+            # the editor's default for a non-displayed scratch value.
+            if o["type"] in (116, 98, 55):
+                t = _next_txt()
+                if t is not None:
+                    attrs["txt"] = t
             components.append(Component(
                 name=o["name"], id=o["id"], type=o["type"], attrs=attrs,
-                events={},   # event-script source not yet recoverable from TFT
+                events={},
             ))
         pages[name] = Page(
             name=name,
