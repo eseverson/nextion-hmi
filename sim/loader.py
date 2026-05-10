@@ -127,6 +127,21 @@ def load_hmi(path: str | Path) -> DisplayState:
     state = DisplayState(pages=pages)
     state.program_s = getattr(hmi, "programS", "") or ""
 
+    # Pictures only live in the compiled TFT in a renderer-friendly
+    # format (RGB565). The HMI's `*.ib` / `*.is` entries are PNG
+    # sources, useful for round-trip but not for runtime rendering. So
+    # if a sibling .tft exists, sniff it for pictures.
+    tft_path = Path(str(path).removesuffix(".HMI") + ".tft")
+    if not tft_path.exists():
+        tft_path = Path(path).with_suffix(".tft")
+    if tft_path.exists():
+        try:
+            from scripts.tft_format import extract_pictures
+            tft_bytes = tft_path.read_bytes()
+            state.pictures = extract_pictures(tft_bytes)
+        except Exception:
+            pass
+
     # Pull each ZI font directory entry out of the HMI raw bytes. Keyed by
     # the integer prefix of the .zi filename — `0.zi` -> 0 — which matches
     # the `font` attribute on Text/XFloat/Number components.

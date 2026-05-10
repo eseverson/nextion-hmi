@@ -253,6 +253,12 @@ def load_tft(path: str | Path) -> DisplayState:
         # we override here in case the HMI was authored at a different
         # rotation than the TFT was compiled at.
         hmi_state.orientation = _orientation_from_guidire(h0["guidire"])
+        # Pictures live only in the compiled TFT (the HMI's `*.ib` files
+        # are PNG source — useful for round-trip but not for the runtime
+        # renderer, which expects RGB565). Always pull them from the TFT
+        # so the renderer has them regardless of which loader path got us
+        # here.
+        hmi_state.pictures = _extract_pictures(raw)
         return hmi_state
 
     # Standalone TFT path: parse objdata_Ram records to reconstruct
