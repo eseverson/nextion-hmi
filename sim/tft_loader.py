@@ -1,32 +1,30 @@
 """sim/tft_loader — load an F-series .tft directly into a DisplayState.
 
-The TFT format is reverse-engineered to the point where every header
-layer can be read and resealed (see `findings/R-editor-unpacking.md`),
-but the on-disk *component* record is a variable-length compiled binary
-that's not yet fully decoded — extracting the same fidelity the HMI
-loader gets (text, color, font, events, etc.) needs more reverse
-engineering on `Myapp_inf.OutPutPageFile`.
+Two modes:
 
-So: this loader's first responsibility is to extract everything we *can*
-read from the TFT (screen size, orientation, page count, per-page object
-counts, font count). Then, for component fidelity, it looks for a
-sibling `.HMI` of the same stem and delegates to the HMI loader for
-component definitions, splicing in the TFT-derived runtime fields
-(orientation, fonts) on top.
+    foo.tft + foo.HMI  → HMI loader's full fidelity (text, colors, fonts,
+                          event scripts) with TFT-derived orientation
+                          spliced in. Use this when both files are
+                          available — the HMI is authoritative.
 
-Behaviour:
+    foo.tft alone      → Components are reconstructed from the TFT's
+                          on-disk `objdata_Ram` records (52 bytes per
+                          component, found at `appinf1.objxinxiadd`).
+                          That gives us per-component **type, id, x, y,
+                          w, h** for every page — enough to render
+                          component outlines at correct positions and
+                          dispatch events by id/type. Attribute *values*
+                          (text, color, font, event-script source) live
+                          in regions that aren't fully decoded yet, so
+                          components come back with empty `attrs` /
+                          `events`.
 
-    foo.tft + foo.HMI  → full DisplayState (HMI provides components,
-                          TFT provides screen geometry / orientation)
-    foo.tft alone      → DisplayState with empty `components` per page
-                          but valid screen geometry. The sim renders
-                          blank pages at the correct dimensions; this is
-                          enough to exercise non-component features
-                          (page-switching commands, system variables,
-                          program.s execution) but won't draw the UI.
-
-When more of the TFT object format is reversed, this loader can be
-upgraded in place; callers don't need to change.
+The TFT-only path is best-effort: it gets you a layout-faithful
+DisplayState that the renderer can place rectangles for, but it can't
+yet show text or run scripts. Closing that gap means decoding the
+180-byte per-object "PianyiData" trailer (which carries attribute IDs
+but routes through binattinf records still being mapped) — a follow-up
+task tracked in findings/R.
 """
 from __future__ import annotations
 import struct
@@ -174,32 +172,114 @@ def load_tft(path: str | Path) -> DisplayState:
         hmi_state.orientation = _orientation_from_guidire(h0["guidire"])
         return hmi_state
 
-    # Fallback: skeleton DisplayState with empty pages.
+    # Standalone TFT path: parse objdata_Ram records to reconstruct
+    # per-component layout. See `_parse_objdata_ram`.
+    objs_by_page = _parse_objdata_ram(raw, h1info, page_dir)
+
     pages: dict[str, Page] = {}
     for entry in page_dir:
         pid = entry["id"]
         name = f"page{pid}"
+        page_objs = objs_by_page[pid]
+        # Object 0 is the page-meta ("type=121"); its x/y/w/h give the
+        # page canvas size. Components are everything else.
+        page_meta = next((o for o in page_objs if o["type"] == 121), None)
+        canvas_w = page_meta["w"] if page_meta else h0["lcdscreenw"]
+        canvas_h = page_meta["h"] if page_meta else h0["lcdscreenh"]
+        components = []
+        for o in page_objs:
+            if o["type"] == 121:   # skip page-meta — it's not a Component
+                continue
+            attrs = {
+                "x": o["x"], "y": o["y"],
+                "w": o["w"], "h": o["h"],
+                "endx": o["endx"], "endy": o["endy"],
+                "objname": o["name"],   # synthesized: "obj{id}" for now
+                "id": o["id"],
+                "type": o["type"],
+            }
+            components.append(Component(
+                name=o["name"], id=o["id"], type=o["type"], attrs=attrs,
+                events={},   # event-script source not yet recoverable from TFT
+            ))
         pages[name] = Page(
             name=name,
             id=pid,
             attrs={
                 "objname": name,
-                "w": h0["lcdscreenw"],
-                "h": h0["lcdscreenh"],
-                # Note: we don't have the page's real bco / fsw / sta /
-                # password from the TFT yet; defaults of 0 mean black bg.
+                "w": canvas_w,
+                "h": canvas_h,
             },
-            components=[],   # TFT-only loader: components not yet decoded
+            components=components,
             events={},
         )
 
     state = DisplayState(pages=pages)
     state.orientation = _orientation_from_guidire(h0["guidire"])
-
-    # Fonts live at known offsets (zimoxinxiadd) but the on-disk format
-    # for the per-font index isn't the same as the HMI's `*.zi` entry —
-    # leaving fonts empty is consistent with the no-HMI fallback path.
+    # Fonts: appinf1.zimoqyt tells us how many ZI fonts the TFT has, but
+    # the on-disk per-font header isn't the same shape as the HMI's `*.zi`
+    # directory entry — left empty here; renderer falls back to TTF.
     return state
+
+
+def _parse_objdata_ram(data: bytes, info: dict, page_dir: list[dict]) -> dict[int, list[dict]]:
+    """Decode each component's 52-byte `objdata_Ram` record from the
+    TFT's `objxinxiadd` region.
+
+    Per-component on-disk stride is `52 + PianyiDataSize_Bianyi`. For
+    the F-series (xiliemark=100) that field is 180 (set in
+    `attinit_T1`), so each record is 232 bytes. Layout of the leading
+    52 bytes:
+
+        +0   byte    objType
+        +1   byte    id              (component id within page)
+        +2   byte    merry
+        +3   byte    objstate
+        +4   uint[6] events          (codesload/down/up/move/etc.,
+                                       0xFFFFFFFF means "no handler")
+        +28  int     memorypos
+        +32  byte    move
+        +33  byte    sendkey
+        +34  byte    aph
+        +35  byte    regaddr
+        +36  short   movex
+        +38  short   movey
+        +40  short   x
+        +42  short   y
+        +44  short   w
+        +46  short   h
+        +48  short   endx
+        +50  short   endy
+    """
+    OBJ_STRIDE = 52 + 180     # F-series: PianyiDataSize_Bianyi == 180
+    by_page: dict[int, list[dict]] = {}
+    for entry in page_dir:
+        pid = entry["id"]
+        objs = []
+        for local_id in range(entry["objqyt"]):
+            global_idx = entry["objstar"] + local_id
+            o = info["objxinxiadd"] + global_idx * OBJ_STRIDE
+            objType, id_, merry, objstate = data[o:o + 4]
+            events = struct.unpack_from("<6I", data, o + 4)
+            memorypos = struct.unpack_from("<I", data, o + 28)[0]
+            movex, movey, x, y, w, h, endx, endy = struct.unpack_from(
+                "<8h", data, o + 36
+            )
+            # Component name is *not* in the on-disk record (it's only
+            # in the HMI source). Synthesize one so callers / tests can
+            # still address components by string name.
+            name = f"obj{id_}" if objType != 121 else f"page{pid}"
+            objs.append({
+                "type": objType, "id": id_, "merry": merry,
+                "objstate": objstate, "events": events,
+                "memorypos": memorypos,
+                "x": x, "y": y, "w": w, "h": h,
+                "endx": endx, "endy": endy,
+                "movex": movex, "movey": movey,
+                "name": name,
+            })
+        by_page[pid] = objs
+    return by_page
 
 
 def _orientation_from_guidire(guidire: int) -> int:
