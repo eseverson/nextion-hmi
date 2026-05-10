@@ -276,9 +276,23 @@ Update it whenever an experiment lands or a new question opens.
 - **HMI sectors are 64 KB-aligned** — structural changes grow the
   HMI by 0x10238 bytes (64K + overhead). Append-only journal confirmed
   with cumulative tombstones across saves.
-- **Page CRC algorithm remains unknown** — 384 standard CRC variants +
-  a dozen non-CRC hashes × 5 prefix combinations × 9 payload ranges
-  all rejected. Custom algorithm. See `scripts/crack_page_crc{,2}.py`.
+- **Page CRC algorithm cracked** ([finding Q](findings/Q-page-crc-cracked.md)) —
+  five-segment chained byte-wise CRC-32/MPEG-2 living in the editor's
+  bundled native `achmi.dll` (subcommand 0x27). Implementation in
+  `scripts/page_crc.py`; verified across all 4 live pages. The page
+  CRC was the **last barrier to writing valid HMI files**. The same
+  achmi.dll has 199 other subcommands — the F-series H2 cipher (T1)
+  likely lives in another one.
+
+### What the page CRC unblocks
+
+- **`scripts/patch_hmi.py`** — modify any byte range inside a `*.pa`
+  payload, recompute the CRC, write a structurally-valid HMI. Verified
+  end-to-end: patch a Variable val, load patched file in the sim, see
+  the new value rendered. First Linux-side HMI write tool.
+- **Sim loader CRC sanity check** — every `*.pa` entry's CRC is verified
+  on load; mismatches warn (without failing) so user-edited files can
+  still load but get flagged.
 
 ## Suggested follow-ups, ranked
 
