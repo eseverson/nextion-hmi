@@ -117,6 +117,37 @@ behaviour is wrong for F-series.
    different resource layouts give different known-plaintext addresses
    at the unknown positions.
 
-The key payload at positions 0x10..0x1f is now the only thing standing
-between us and full F-series H2 decryption. Single targeted experiment
-(adding a picture) should crack it.
+## Cross-experiment plaintext attempt (failed: schema mismatch)
+
+The Picture-component experiment (15) and for-loop experiment (16) gave
+new ciphertext data, but cross-deriving keys from them produced
+**conflicts** at every count-field position (H2+0x30..0x3f). Specifically:
+
+- Baseline plaintext `pages_count = 4` at H2+0x30 implies key[0x10..0x11]
+  = `51 e8`.
+- Exp15 plaintext `pages_count = 4` (still 4, no new pages) at H2+0x30
+  implies key[0x10..0x11] = `e5 6c`.
+
+Different keys for the same cycle position from "the same plaintext"
+means **at least one of the assumptions is wrong**. Most likely: the
+F-series H2 schema is NOT exactly TFTTool's T0/K0 layout — count fields
+sit at different offsets, or extra fields exist between addresses and
+counts on F-series.
+
+Implication: TFTTool's `_fileHeader2` schema is a partial guess for
+F-series. The first 0x30 bytes (the 12 address u32 fields) seem correct
+based on the address-only assumptions giving consistent keys; positions
+0x30+ likely deviate.
+
+Lower-confidence findings from running the cross-experiment derivation
+anyway — these are the WRONG-cycle-position values and shouldn't be
+trusted, but recorded for future reference:
+
+```
+position 0x10..0x11: candidates {0x51e8, 0xe56c, 0x6c..} — pages_count
+position 0x14..0x15: candidates {0xeafe, 0xebfe, 0x9e..} — pictures_count
+```
+
+The full key still needs experiments that cleanly probe positions
+0x10..0x1f, OR a re-derivation of the F-series schema from a known
+plaintext at those positions.
