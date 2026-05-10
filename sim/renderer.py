@@ -252,12 +252,12 @@ def render_component(img: Image.Image, draw: ImageDraw.ImageDraw, c, page_bg,
         a = dict(a); a["bco"] = 65535       # white
         a.setdefault("pco", 0)              # black
     elif t == T_QRCODE and a.get("bco") is None:
-        # Editor default for QR: pco=0 (black finder pattern) with
-        # sta=0 (transparent — page bg shows through).
+        # Editor default for QR: bco=white, pco=black. The editor
+        # always fills the component with bco regardless of sta, so
+        # we don't override sta here.
         a = dict(a)
         a.setdefault("bco", 65535)
         a.setdefault("pco", 0)
-        a.setdefault("sta", 0)
     elif t == T_DUAL_STATE_BUTTON and a.get("bco") is None:
         a = dict(a); a["bco"] = 50712       # editor's default button gray
         a.setdefault("pco", 0)
@@ -291,36 +291,30 @@ def render_component(img: Image.Image, draw: ImageDraw.ImageDraw, c, page_bg,
         return
 
     if t == T_SCROLLING_TEXT:
-        # Scrolling Text: text enters from the right, moves left across
-        # the box, exits to the left, repeats. The box itself stays put;
-        # we render the text onto a clipped layer and shift it by the
-        # animation offset derived from `time_ms`.
+        # Scrolling Text: per Nextion, dir=0 scrolls text rightward
+        # (enters from left, exits right) and dir=1 scrolls leftward
+        # (the classic marquee — enters from right, exits left).
         txt = a.get("txt", "") or ""
         font_id = a.get("font")
         from PIL import Image as _Image
         clip = _Image.new("RGB", (max(w, 1), max(h, 1)), bco)
         clip_draw = ImageDraw.Draw(clip)
-        # Measure text width via Pillow's default font as a fallback.
         try:
             ttf = load_font(font_size_for(font_id, fonts))
             tbbox = clip_draw.textbbox((0, 0), txt, font=ttf)
             text_w = tbbox[2] - tbbox[0]
         except Exception:
             text_w = len(txt) * 8
-        # Total scroll cycle: text travels from x=w (off right edge) all
-        # the way to x=-text_w (off left edge), then wraps.
         cycle = w + text_w
         if cycle <= 0:
             cycle = max(w, 1)
         speed_px_per_sec = 60
         progress = int((time_ms / 1000) * speed_px_per_sec) % cycle
-        # Direction 0 (default) = scroll left (text starts right, ends left).
-        # Direction 1 = scroll right (text starts left, ends right).
         direction = a.get("dir", 0) or 0
         if direction == 1:
-            text_x = -text_w + progress
+            text_x = w - progress           # right-to-left (marquee)
         else:
-            text_x = w - progress
+            text_x = -text_w + progress     # left-to-right (default dir=0)
         _draw_text(clip, clip_draw, txt, font_id, fonts,
                    (text_x, 0, text_w, h),
                    a.get("xcen", 0), a.get("ycen", 1), pco)
@@ -415,20 +409,26 @@ def render_component(img: Image.Image, draw: ImageDraw.ImageDraw, c, page_bg,
         return
 
     if t == T_QRCODE:
-        # Generate the real QR from `txt`. Falls back to a finder-pattern
-        # placeholder if `segno` isn't installed or txt is empty.
+        # Always fill the box with bco — the Nextion editor shows the QR
+        # on a solid background regardless of sta. Then place the matrix
+        # centered with a small interior padding (the editor leaves a
+        # visible margin around the dark modules).
+        draw.rectangle([x, y, x + w - 1, y + h - 1], fill=bco)
         txt = a.get("txt", "") or ""
         if txt:
             try:
                 import segno
                 qr = segno.make(txt, error="m")
-                # qr.matrix is a list of row tuples of 0/1; render as
-                # PIL image at the component's box dimensions.
                 matrix = qr.matrix
                 mw = len(matrix[0])
                 mh = len(matrix)
-                # Pick a pixel scale that fits within w/h, then center.
-                scale = max(1, min(w // mw, h // mh))
+                # Reserve ~6% of the smaller side for the quiet zone on
+                # each side (so ~12% total). Clamp to at least 2 px so
+                # tiny boxes still have a visible border.
+                pad = max(2, min(w, h) // 16)
+                inner_w = max(1, w - 2 * pad)
+                inner_h = max(1, h - 2 * pad)
+                scale = max(1, min(inner_w // mw, inner_h // mh))
                 qr_w = mw * scale
                 qr_h = mh * scale
                 ox = x + (w - qr_w) // 2
