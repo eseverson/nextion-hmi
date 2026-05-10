@@ -136,6 +136,15 @@ def _extract_xfloat_records(data: bytes) -> list[dict]:
     return extract_xfloat_records(data)
 
 
+def _extract_progressbar_records(data: bytes) -> list[dict]:
+    import sys as _sys
+    repo_root = Path(__file__).resolve().parents[1]
+    if str(repo_root) not in _sys.path:
+        _sys.path.insert(0, str(repo_root))
+    from scripts.tft_format import extract_progressbar_records
+    return extract_progressbar_records(data)
+
+
 def _parse_pages(data: bytes, info: dict) -> list[dict]:
     """Page directory at `pageadd`: 16 bytes per entry (`pagexinxi` struct)."""
     pages = []
@@ -219,6 +228,7 @@ def load_tft(path: str | Path) -> DisplayState:
                       for o in objs if o["type"] == 52)
     var_vals = _extract_variable_vals(raw, n_variables)
     xfloat_recs = _extract_xfloat_records(raw)
+    progressbar_recs = _extract_progressbar_records(raw)
 
     # Walk all text-bearing components in TFT order and pair them with
     # extracted text slots. Best-effort: assumes the editor emits txt
@@ -245,6 +255,14 @@ def load_tft(path: str | Path) -> DisplayState:
     def _next_xfloat():
         try:
             return next(xfloat_iter)
+        except StopIteration:
+            return None
+
+    progressbar_iter = iter(progressbar_recs)
+
+    def _next_progressbar():
+        try:
+            return next(progressbar_iter)
         except StopIteration:
             return None
 
@@ -295,6 +313,17 @@ def load_tft(path: str | Path) -> DisplayState:
                     attrs["val"] = rec["val"]
                     attrs["vvs0"] = rec["vvs0"]
                     attrs["vvs1"] = rec["vvs1"]
+            # Progress Bar (type=106) records sit between XFloats; the
+            # heuristic extractor finds them by their non-`0xffde` pco.
+            if o["type"] == 106:
+                rec = _next_progressbar()
+                if rec is not None:
+                    attrs["bco"] = rec["bco"]
+                    attrs["pco"] = rec["pco"]
+                    attrs["val"] = rec["val"]
+                    # Keep `sta=1` (paint background); ProgressBar
+                    # extraction's sta byte doesn't always agree with HMI.
+                    attrs["sta"] = 1
             components.append(Component(
                 name=o["name"], id=o["id"], type=o["type"], attrs=attrs,
                 events={},

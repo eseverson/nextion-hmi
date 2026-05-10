@@ -235,6 +235,55 @@ def extract_xfloat_records(data: bytes) -> list[dict]:
     return records
 
 
+def extract_progressbar_records(data: bytes) -> list[dict]:
+    """Find ProgressBar (type=106) records in the per-component records
+    region.
+
+    Strategy: ProgressBar records sit in *gaps* between XFloat records
+    (XFloats walk in stride 24, ProgressBars insert at points where
+    that stride breaks). Use `extract_xfloat_records` to find the
+    record offsets, then search only in the gaps for the pattern:
+
+        <val u8 in 0..100>  <flag u8>  <bco u16>  <pco u16>
+
+    with `pco != 0xffde` (XFloat default), `bco` non-trivial, and a
+    short zero-byte run before the val (alignment padding).
+
+    Empirically val is in 0..100 (percent-fill). bco/pco are the bar's
+    background and fill colors. Returns one dict per ProgressBar found.
+    """
+    xf_recs = extract_xfloat_records(data)
+    if not xf_recs:
+        return []
+    out = []
+    # Look immediately AFTER each XFloat record for an inserted PB.
+    for i, rec in enumerate(xf_recs):
+        gap_start = rec["_off"] + 24
+        gap_end = (xf_recs[i + 1]["_off"]
+                   if i + 1 < len(xf_recs) else gap_start + 16)
+        if gap_end - gap_start < 8:
+            continue
+        # PB record sits at gap_start - 4 (overlapping x5's tail) or in
+        # the gap proper. Try the gap first.
+        for j in range(max(gap_start - 4, 0), gap_end - 8):
+            v = data[j]
+            if not (0 <= v <= 100):
+                continue
+            bco = struct.unpack_from("<H", data, j + 2)[0]
+            pco = struct.unpack_from("<H", data, j + 4)[0]
+            if not (0 < bco < 0xfffe and 0 < pco < 0xfffe and pco != 0xffde):
+                continue
+            # Require ≥3 leading zero bytes for confidence.
+            if j >= 4 and data[j - 4:j - 1] != b"\x00\x00\x00":
+                continue
+            out.append({
+                "val": v, "bco": bco, "pco": pco,
+                "sta": data[j + 6], "font": data[j + 7], "_off": j,
+            })
+            break
+    return out
+
+
 def extract_variable_vals(data: bytes, n_variables: int) -> list[int]:
     """Pull Variable component `val` values out of the TFT's flat data
     region.
