@@ -251,8 +251,12 @@ def render_component(img: Image.Image, draw: ImageDraw.ImageDraw, c, page_bg,
         a = dict(a); a["bco"] = 65535       # white
         a.setdefault("pco", 0)              # black
     elif t == T_QRCODE and a.get("bco") is None:
-        a = dict(a); a["bco"] = 65535
+        # Editor default for QR: pco=0 (black finder pattern) with
+        # sta=0 (transparent — page bg shows through).
+        a = dict(a)
+        a.setdefault("bco", 65535)
         a.setdefault("pco", 0)
+        a.setdefault("sta", 0)
     elif t == T_DUAL_STATE_BUTTON and a.get("bco") is None:
         a = dict(a); a["bco"] = 50712       # editor's default button gray
         a.setdefault("pco", 0)
