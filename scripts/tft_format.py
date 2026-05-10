@@ -307,6 +307,45 @@ def extract_variable_vals(data: bytes, n_variables: int) -> list[int]:
     return out
 
 
+def extract_text_colors(data: bytes, slot_offset: int, comp_type: int) -> dict:
+    """For a given text-slot file offset (the position of the first text
+    byte, as returned by `extract_text_slots`), pull the bco/pco
+    metadata that precedes the slot.
+
+    Layout depends on the component type:
+
+    * **Text (116) / ScrollingText (55)** — 4-byte prefix immediately
+      before the `01 01 00` marker:
+
+          ... <pco u16> <bco u16> 01 01 00 <text>\\0
+
+    * **Button (98)** — wider prefix carrying both normal and pressed
+      colors:
+
+          ... <bco u16> <bco2 u16> <pco u16> <pco2 u16> 01 01 00 <text>\\0
+
+    Returns a dict of attrs to merge into the component (`bco`, `pco`,
+    plus `bco2`/`pco2` for Buttons). Returns `{}` if the offset is too
+    close to the start of the file to read the prefix.
+    """
+    if comp_type == 98:    # Button
+        if slot_offset < 11:
+            return {}
+        return {
+            "bco":  struct.unpack_from("<H", data, slot_offset - 11)[0],
+            "bco2": struct.unpack_from("<H", data, slot_offset - 9)[0],
+            "pco":  struct.unpack_from("<H", data, slot_offset - 7)[0],
+            "pco2": struct.unpack_from("<H", data, slot_offset - 5)[0],
+        }
+    # Text / ScrollingText: 4-byte pco/bco prefix.
+    if slot_offset < 7:
+        return {}
+    return {
+        "pco": struct.unpack_from("<H", data, slot_offset - 7)[0],
+        "bco": struct.unpack_from("<H", data, slot_offset - 5)[0],
+    }
+
+
 def extract_text_slots(data: bytes) -> list[tuple[int, str]]:
     """Heuristically pull `txt` attribute strings out of the TFT body.
 

@@ -145,6 +145,15 @@ def _extract_progressbar_records(data: bytes) -> list[dict]:
     return extract_progressbar_records(data)
 
 
+def _extract_text_colors(data: bytes, slot_offset: int, comp_type: int) -> dict:
+    import sys as _sys
+    repo_root = Path(__file__).resolve().parents[1]
+    if str(repo_root) not in _sys.path:
+        _sys.path.insert(0, str(repo_root))
+    from scripts.tft_format import extract_text_colors
+    return extract_text_colors(data, slot_offset, comp_type)
+
+
 def _parse_pages(data: bytes, info: dict) -> list[dict]:
     """Page directory at `pageadd`: 16 bytes per entry (`pagexinxi` struct)."""
     pages = []
@@ -236,9 +245,9 @@ def load_tft(path: str | Path) -> DisplayState:
     # txt if counts diverge. See `_extract_text_slots`.
     text_iter = iter(text_slots)
 
-    def _next_txt():
+    def _next_txt_slot():
         try:
-            return next(text_iter)[1]
+            return next(text_iter)
         except StopIteration:
             return None
 
@@ -290,9 +299,13 @@ def load_tft(path: str | Path) -> DisplayState:
             # ScrollingText(55). Skip Variable(52) — `txt='newtxt'` is
             # the editor's default for a non-displayed scratch value.
             if o["type"] in (116, 98, 55):
-                t = _next_txt()
-                if t is not None:
+                slot = _next_txt_slot()
+                if slot is not None:
+                    slot_off, t = slot
                     attrs["txt"] = t
+                    # Pull bco/pco (and bco2/pco2 for Buttons) from the
+                    # slot prefix.
+                    attrs.update(_extract_text_colors(raw, slot_off, o["type"]))
             # Variables (type=52) carry their `val` from the dedicated
             # u32 array after the `90 01 01 00` marker.
             if o["type"] == 52:
