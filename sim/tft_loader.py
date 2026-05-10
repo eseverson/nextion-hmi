@@ -163,6 +163,15 @@ def _extract_slider_records(data: bytes) -> list[dict]:
     return extract_slider_records(data)
 
 
+def _extract_zi_fonts(data: bytes) -> dict:
+    import sys as _sys
+    repo_root = Path(__file__).resolve().parents[1]
+    if str(repo_root) not in _sys.path:
+        _sys.path.insert(0, str(repo_root))
+    from scripts.tft_format import extract_zi_fonts
+    return extract_zi_fonts(data)
+
+
 def _parse_pages(data: bytes, info: dict) -> list[dict]:
     """Page directory at `pageadd`: 16 bytes per entry (`pagexinxi` struct)."""
     pages = []
@@ -324,6 +333,10 @@ def load_tft(path: str | Path) -> DisplayState:
                     # Pull bco/pco (and bco2/pco2 for Buttons) from the
                     # slot prefix.
                     attrs.update(_extract_text_colors(raw, slot_off, o["type"]))
+                    # font for Texts/Buttons isn't carried in the slot
+                    # prefix; the editor's default is font=0 (the
+                    # project's primary body font, by convention).
+                    attrs.setdefault("font", 0)
             # Variables (type=52) carry their `val` from the dedicated
             # u32 array after the `90 01 01 00` marker.
             if o["type"] == 52:
@@ -387,9 +400,10 @@ def load_tft(path: str | Path) -> DisplayState:
 
     state = DisplayState(pages=pages)
     state.orientation = _orientation_from_guidire(h0["guidire"])
-    # Fonts: appinf1.zimoqyt tells us how many ZI fonts the TFT has, but
-    # the on-disk per-font header isn't the same shape as the HMI's `*.zi`
-    # directory entry — left empty here; renderer falls back to TTF.
+    # Extract embedded ZI fonts (per-font 44-byte headers at
+    # zimoxinxiadd, then name + glyph data following). Renderer uses
+    # these via state.fonts; missing fonts fall back to TTF.
+    state.fonts = _extract_zi_fonts(raw)
     return state
 
 

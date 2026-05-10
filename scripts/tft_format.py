@@ -367,6 +367,86 @@ def extract_variable_vals(data: bytes, n_variables: int) -> list[int]:
     return out
 
 
+def extract_zi_fonts(data: bytes) -> dict[int, "ZiFont"]:
+    """Extract embedded ZI fonts from the TFT.
+
+    The TFT stores fonts at `appinf1.zimoxinxiadd` with the layout:
+
+        zimoxinxiadd                — start of font headers
+        + 0..44, +44..88, ...        — N × 44-byte font headers
+        + 88..                       — first font's name + glyph data
+        + ... etc                    — subsequent fonts' name + glyph data
+
+    Each header's `data_start` field at offset 24 is the **offset from
+    `zimoxinxiadd`** (not from the header's own start) to where that
+    font's name + glyph data begin. The font's binary layout is
+    identical to a standalone HMI `*.zi` file once you splice the
+    44-byte header onto the name+glyph data with `data_start` rewritten
+    to 44 (the header size, where the name immediately follows).
+
+    Returns a dict keyed by font id (0, 1, ...) with parsed `ZiFont`
+    instances, or an empty dict on failure.
+    """
+    from scripts.h2_cipher import encrypt as h2_decrypt
+    from sim.font import parse_zi
+    if len(data) < H2_END:
+        return {}
+    model_crc = struct.unpack_from("<I", data, APPINF0_MODELCRC_OFF)[0]
+    plain = h2_decrypt(data[H2_START:H2_END], model_crc)
+    zimoxinxiadd = struct.unpack_from("<I", plain, 0x30)[0]
+    zimoqyt = struct.unpack_from("<H", plain, 0x44)[0]
+    strdataaddr = struct.unpack_from("<I", plain, 0x14)[0]
+    if zimoxinxiadd == 0 or zimoqyt == 0:
+        return {}
+
+    # Get each font's data_start (offset from zimoxinxiadd to its
+    # name+glyph block). Add a sentinel for the end of the last font's
+    # data — we cap it at `strdataaddr`, which is the next major region.
+    data_starts = []
+    for n in range(zimoqyt):
+        hdr_off = zimoxinxiadd + n * 44
+        if hdr_off + 44 > len(data):
+            return {}
+        ds = struct.unpack_from("<I", data, hdr_off + 24)[0]
+        data_starts.append(ds)
+    data_starts.append(strdataaddr - zimoxinxiadd)
+
+    fonts = {}
+    for n in range(zimoqyt):
+        hdr_off = zimoxinxiadd + n * 44
+        name_off = zimoxinxiadd + data_starts[n]
+        next_off = zimoxinxiadd + data_starts[n + 1]
+        if name_off >= next_off or next_off > len(data):
+            continue
+
+        # Detect the printable-ASCII name length empirically; the
+        # `desc_len` byte at +17 is sometimes off-by-one from the actual.
+        name_end = name_off
+        while (name_end < next_off
+               and name_end - name_off < 64
+               and 32 <= data[name_end] < 127):
+            name_end += 1
+        name_bytes = bytes(data[name_off:name_end]).rstrip(b" ")
+        if not name_bytes:
+            continue
+        glyph_start = name_off + len(name_bytes)
+        glyph_data = data[glyph_start:next_off]
+
+        # Reconstruct the standalone ZI: 44-byte header (with data_start
+        # rewritten to 44 so the parser puts the name immediately after
+        # the header) + name + glyph data.
+        header = bytearray(data[hdr_off:hdr_off + 44])
+        struct.pack_into("<I", header, 24, 44)
+        header[17] = len(name_bytes)
+        reconstructed = bytes(header) + name_bytes + glyph_data
+        try:
+            font = parse_zi(reconstructed)
+        except Exception:
+            continue
+        fonts[n] = font
+    return fonts
+
+
 def extract_text_colors(data: bytes, slot_offset: int, comp_type: int) -> dict:
     """For a given text-slot file offset (the position of the first text
     byte, as returned by `extract_text_slots`), pull the bco/pco
