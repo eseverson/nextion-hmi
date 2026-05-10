@@ -235,6 +235,66 @@ def extract_xfloat_records(data: bytes) -> list[dict]:
     return records
 
 
+def extract_slider_records(data: bytes) -> list[dict]:
+    """Find Slider (type=1) records.
+
+    The Slider record sits in a per-page records region (the
+    `attdataaddr` region for that page). Layout (16 bytes):
+
+        +0  bco (u16)     +2  pco (u16)
+        +4  val (u16)     +6  maxval (u16)
+        +8  minval (u16)  +10 ch (u16)
+        +12 ... 4 more bytes
+
+    Detection: search file body for a 12-byte sequence where: `bco`
+    matches the page bco extracted via `extract_page_bco`, `pco !=
+    0xffde` (XFloat default), `minval < maxval`, and
+    `minval <= val <= maxval`.
+
+    To avoid matching inside the resources/page-bytecode regions,
+    restrict the scan to the strdataaddr region (after init bytecode
+    and per-page records start).
+
+    Returns one dict per match in file order.
+    """
+    from scripts.h2_cipher import encrypt as h2_decrypt
+    if len(data) < H2_END:
+        return []
+    model_crc = struct.unpack_from("<I", data, APPINF0_MODELCRC_OFF)[0]
+    plain = h2_decrypt(data[H2_START:H2_END], model_crc)
+    strdataaddr = struct.unpack_from("<I", plain, 0x14)[0]
+
+    page_bco = extract_page_bco(data) or 0x2946
+    out = []
+    n = len(data) - 4
+    i = strdataaddr
+    while i < n - 12:
+        bco = struct.unpack_from("<H", data, i)[0]
+        if bco != page_bco:
+            i += 1
+            continue
+        pco = struct.unpack_from("<H", data, i + 2)[0]
+        val = struct.unpack_from("<H", data, i + 4)[0]
+        maxval = struct.unpack_from("<H", data, i + 6)[0]
+        minval = struct.unpack_from("<H", data, i + 8)[0]
+        ch = struct.unpack_from("<H", data, i + 10)[0]
+        if (0 < pco < 0xfffe and pco != 0xffde
+                and pco != page_bco
+                and 0 < maxval < 0x8000
+                and minval < maxval
+                and minval <= val <= maxval
+                and 0 < ch < 256):
+            out.append({
+                "bco": bco, "pco": pco, "val": val,
+                "maxval": maxval, "minval": minval, "ch": ch,
+                "_off": i,
+            })
+            i += 12
+            continue
+        i += 1
+    return out
+
+
 def extract_progressbar_records(data: bytes) -> list[dict]:
     """Find ProgressBar (type=106) records in the per-component records
     region.

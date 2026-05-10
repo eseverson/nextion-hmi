@@ -154,6 +154,15 @@ def _extract_text_colors(data: bytes, slot_offset: int, comp_type: int) -> dict:
     return extract_text_colors(data, slot_offset, comp_type)
 
 
+def _extract_slider_records(data: bytes) -> list[dict]:
+    import sys as _sys
+    repo_root = Path(__file__).resolve().parents[1]
+    if str(repo_root) not in _sys.path:
+        _sys.path.insert(0, str(repo_root))
+    from scripts.tft_format import extract_slider_records
+    return extract_slider_records(data)
+
+
 def _parse_pages(data: bytes, info: dict) -> list[dict]:
     """Page directory at `pageadd`: 16 bytes per entry (`pagexinxi` struct)."""
     pages = []
@@ -238,6 +247,7 @@ def load_tft(path: str | Path) -> DisplayState:
     var_vals = _extract_variable_vals(raw, n_variables)
     xfloat_recs = _extract_xfloat_records(raw)
     progressbar_recs = _extract_progressbar_records(raw)
+    slider_recs = _extract_slider_records(raw)
 
     # Walk all text-bearing components in TFT order and pair them with
     # extracted text slots. Best-effort: assumes the editor emits txt
@@ -272,6 +282,14 @@ def load_tft(path: str | Path) -> DisplayState:
     def _next_progressbar():
         try:
             return next(progressbar_iter)
+        except StopIteration:
+            return None
+
+    slider_iter = iter(slider_recs)
+
+    def _next_slider():
+        try:
+            return next(slider_iter)
         except StopIteration:
             return None
 
@@ -337,6 +355,16 @@ def load_tft(path: str | Path) -> DisplayState:
                     # Keep `sta=1` (paint background); ProgressBar
                     # extraction's sta byte doesn't always agree with HMI.
                     attrs["sta"] = 1
+            # Slider (type=1) records sit in a per-page records region.
+            if o["type"] == 1:
+                rec = _next_slider()
+                if rec is not None:
+                    attrs["bco"] = rec["bco"]
+                    attrs["pco"] = rec["pco"]
+                    attrs["val"] = rec["val"]
+                    attrs["maxval"] = rec["maxval"]
+                    attrs["minval"] = rec["minval"]
+                    attrs["ch"] = rec["ch"]
             components.append(Component(
                 name=o["name"], id=o["id"], type=o["type"], attrs=attrs,
                 events={},
