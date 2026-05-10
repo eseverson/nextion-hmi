@@ -293,6 +293,8 @@ def load_tft(path: str | Path) -> DisplayState:
                     attrs["sta"] = rec["sta"]
                     attrs["font"] = rec["font"]
                     attrs["val"] = rec["val"]
+                    attrs["vvs0"] = rec["vvs0"]
+                    attrs["vvs1"] = rec["vvs1"]
             components.append(Component(
                 name=o["name"], id=o["id"], type=o["type"], attrs=attrs,
                 events={},

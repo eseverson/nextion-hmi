@@ -200,17 +200,35 @@ def extract_xfloat_records(data: bytes) -> list[dict]:
     if first < 0:
         return []
     records = []
-    off = first - 2     # bco starts 2 bytes before the signature match
-    while off + 24 <= len(data) - 4:
-        if data[off + 2:off + 6] != sig:
+
+    # Find the records region's outer bounds. End at first text-slot
+    # marker (`01 01 00 <ASCII>`), which sits right after the records.
+    n = len(data) - 4
+    region_end = n
+    for i in range(strdataaddr, n - 4):
+        if (data[i:i + 3] == b"\x01\x01\x00"
+                and 32 <= data[i + 3] < 127 and data[i + 4] != 0):
+            region_end = i
             break
+
+    # Walk forward by 24 bytes. When the signature doesn't match, skip
+    # forward by 8 bytes and try again (handles the 32-byte ProgressBar
+    # record interrupting an otherwise-uniform run of XFloat records).
+    off = first - 2
+    while off + 24 <= region_end:
+        if data[off + 2:off + 6] != sig:
+            off += 8
+            continue
         bco = struct.unpack_from("<H", data, off)[0]
         pco = struct.unpack_from("<H", data, off + 2)[0]
         sta = data[off + 4]
         font = data[off + 5]
         val = struct.unpack_from("<I", data, off + 6)[0]
+        vvs0 = data[off + 10]
+        vvs1 = data[off + 11]
         records.append({
             "bco": bco, "pco": pco, "sta": sta, "font": font, "val": val,
+            "vvs0": vvs0, "vvs1": vvs1,
             "_off": off,
         })
         off += 24
