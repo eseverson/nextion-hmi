@@ -196,42 +196,41 @@ def extract_xfloat_records(data: bytes) -> list[dict]:
     strdataaddr = struct.unpack_from("<I", plain, 0x14)[0]
 
     sig = b"\xde\xff\x01\x01"   # pco=0xffde, sta=1, font=1 — XFloat signature
-    first = data.find(sig, strdataaddr)
-    if first < 0:
-        return []
     records = []
-
-    # Find the records region's outer bounds. End at first text-slot
-    # marker (`01 01 00 <ASCII>`), which sits right after the records.
     n = len(data) - 4
-    region_end = n
-    for i in range(strdataaddr, n - 4):
-        if (data[i:i + 3] == b"\x01\x01\x00"
-                and 32 <= data[i + 3] < 127 and data[i + 4] != 0):
-            region_end = i
-            break
 
-    # Walk forward by 24 bytes. When the signature doesn't match, skip
-    # forward by 8 bytes and try again (handles the 32-byte ProgressBar
-    # record interrupting an otherwise-uniform run of XFloat records).
-    off = first - 2
-    while off + 24 <= region_end:
-        if data[off + 2:off + 6] != sig:
-            off += 8
+    # Scan the entire strdata region for XFloat records. Text-slot
+    # prefixes contain the same 4-byte signature (`de ff <bco> 01 01 00
+    # <text>`), so we need an extra filter to discriminate. Real XFloat
+    # records have vvs0/vvs1 at +10/+11, which are tiny ints (0..9).
+    # Text slots have ASCII text bytes there (≥0x20). That's the cheap
+    # filter that lets us scan past the main text region and pick up
+    # XFloats on later pages (e.g. gauge).
+    i = data.find(sig, strdataaddr)
+    while 0 <= i and i + 22 <= n:
+        off = i - 2
+        if off < 0:
+            i = data.find(sig, i + 1)
+            continue
+        vvs0 = data[off + 10]
+        vvs1 = data[off + 11]
+        if vvs0 > 9 or vvs1 > 9:
+            # Likely the prefix of a text slot. Skip to next signature.
+            i = data.find(sig, i + 1)
             continue
         bco = struct.unpack_from("<H", data, off)[0]
         pco = struct.unpack_from("<H", data, off + 2)[0]
         sta = data[off + 4]
         font = data[off + 5]
         val = struct.unpack_from("<I", data, off + 6)[0]
-        vvs0 = data[off + 10]
-        vvs1 = data[off + 11]
         records.append({
             "bco": bco, "pco": pco, "sta": sta, "font": font, "val": val,
             "vvs0": vvs0, "vvs1": vvs1,
             "_off": off,
         })
-        off += 24
+        # Advance past this 24-byte record; the next sig might be at
+        # off+24 (consecutive) or further (after gaps for other types).
+        i = data.find(sig, off + 24)
     return records
 
 
