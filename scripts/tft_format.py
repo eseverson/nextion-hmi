@@ -407,13 +407,20 @@ def extract_pictures(data: bytes) -> dict[int, "Image.Image"]:
         dataaddr = struct.unpack_from("<I", data, rec_off + 8)[0]
         W = struct.unpack_from("<H", data, rec_off + 12)[0]
         H = struct.unpack_from("<H", data, rec_off + 14)[0]
+        imgbytesize = struct.unpack_from("<I", data, rec_off + 16)[0]
         if W == 0 or H == 0:
             continue
-        pixel_off = picxinxiadd + dataaddr
+        # The compiled picture block starts at picxinxiadd + dataaddr
+        # and is `imgbytesize` bytes long. The actual W*H*2 RGB565
+        # pixels sit at the *end* of that block — there's a leading
+        # header (typically 20 bytes for picdatatype=3) carrying alpha
+        # mask metadata or similar. Compute the header size from the
+        # difference so it works regardless of picdatatype variant.
         n_bytes = W * H * 2
+        header_bytes = max(0, imgbytesize - n_bytes)
+        pixel_off = picxinxiadd + dataaddr + header_bytes
         if pixel_off + n_bytes > len(data):
             continue
-        # Decode RGB565 LE → RGB888
         img = Image.new("RGB", (W, H))
         pixels = []
         for i in range(0, n_bytes, 2):
