@@ -234,6 +234,31 @@ def render_component(img: Image.Image, draw: ImageDraw.ImageDraw, c, page_bg,
     if w <= 0 or h <= 0:
         return
 
+    # Type-specific defaults for components where the TFT-only loader
+    # can't yet pull the bco/pco/val attrs from per-component bytecode.
+    # These match the editor's freshly-added defaults so projects that
+    # haven't customised them render correctly.
+    if t == T_WAVEFORM and a.get("bco") is None:
+        a = dict(a); a["bco"] = 0           # black
+    elif t == T_GAUGE and a.get("bco") is None:
+        a = dict(a); a["bco"] = 65535       # white
+        a.setdefault("pco", 1024)           # green
+    elif t in (T_CHECKBOX, T_RADIO) and a.get("bco") is None:
+        a = dict(a); a["bco"] = 65535       # white
+        a.setdefault("pco", 0)              # black
+        a.setdefault("val", 1)              # checked
+    elif t == T_SCROLLING_TEXT and a.get("bco") is None:
+        a = dict(a); a["bco"] = 65535       # white
+        a.setdefault("pco", 0)              # black
+    elif t == T_QRCODE and a.get("bco") is None:
+        a = dict(a); a["bco"] = 65535
+        a.setdefault("pco", 0)
+    elif t == T_DUAL_STATE_BUTTON and a.get("bco") is None:
+        a = dict(a); a["bco"] = 50712       # editor's default button gray
+        a.setdefault("pco", 0)
+    elif t == T_CROP_PICTURE and a.get("bco") is None:
+        a = dict(a); a["bco"] = 50712       # similar gray placeholder
+
     bco = rgb565_to_rgb888(a.get("bco")) or page_bg
     pco = rgb565_to_rgb888(a.get("pco")) or (255, 255, 255)
     sta = a.get("sta", 1)  # 1 = solid color (the only mode we render)
