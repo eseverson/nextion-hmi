@@ -320,12 +320,19 @@ def render_component(img: Image.Image, draw: ImageDraw.ImageDraw, c, page_bg,
         from PIL import Image as _Image
         clip = _Image.new("RGB", (max(w, 1), max(h, 1)), bco)
         clip_draw = ImageDraw.Draw(clip)
-        try:
-            ttf = load_font(font_size_for(font_id, fonts))
+        # Measure text in the same font _draw_text will use (a ZI bitmap
+        # font if available, else the TTF substitute sized by component
+        # height). Using the wrong measurement here is what caused the
+        # rendered string to be clipped to a few characters.
+        zi = fonts.get(font_id) if isinstance(font_id, int) else None
+        if zi is not None:
+            text_w = _zi_text_width(zi, zi.encode_text(txt))
+        else:
+            ttf = load_font(font_size_for(font_id, h))
             tbbox = clip_draw.textbbox((0, 0), txt, font=ttf)
             text_w = tbbox[2] - tbbox[0]
-        except Exception:
-            text_w = len(txt) * 8
+        if text_w <= 0:
+            text_w = len(txt) * 8 or 1
         cycle = w + text_w
         if cycle <= 0:
             cycle = max(w, 1)

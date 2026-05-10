@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import time
 import tkinter as tk
 from pathlib import Path
@@ -163,6 +164,10 @@ class App:
             bg="#0e639c", fg="#ffffff", relief=tk.FLAT, padx=10,
         )
         send_btn.pack(side=tk.LEFT)
+        tk.Button(
+            cmd_frame, text="Restart", command=self._restart,
+            bg="#3a3d41", fg="#ffffff", relief=tk.FLAT, padx=10,
+        ).pack(side=tk.LEFT, padx=(4, 0))
 
         self.show_outlines = tk.BooleanVar(value=False)
         tk.Checkbutton(
@@ -456,6 +461,19 @@ class App:
             self._save_settings()
         finally:
             self.root.destroy()
+
+    def _restart(self) -> None:
+        """Save state, tear down the Tk root, and exec a fresh sim
+        process with the same argv. Used by the toolbar Restart button
+        for fast iteration when editing the HMI/TFT or renderer code."""
+        try:
+            self._save_settings()
+        finally:
+            try:
+                self.root.destroy()
+            except Exception:
+                pass
+        os.execv(sys.executable, [sys.executable] + sys.argv)
 
     # ---------- File open ----------
 
