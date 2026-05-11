@@ -1,210 +1,161 @@
 # Next steps — toward authoring HMI/TFT from scratch
 
-Forward-looking work items only. Completed items are not listed here;
-their results live in the format docs and the cross-referenced
-research docs.
+Forward-looking work items only. Completed items live in the format
+docs and cross-referenced research docs.
 
-## 1. Finish the script compiler
+## 1. Integrate the script compiler additions
 
-**Where it stands**: [`scripts/script_compiler.py`](../scripts/script_compiler.py)
-handles assignments, `print`/`printh`, `page N`, system-variable
-writes, and global `int` declarations. Round-trips 8 source→bytecode
-pairs from the project corpus.
+**Where it stands**: Three independent pieces exist and pass their own
+self-tests:
 
-**What's left**:
+- [`scripts/script_compiler.py`](../scripts/script_compiler.py) — base
+  compiler (assignments, `print`/`printh`, `page N`, system-variable
+  writes, global `int` declarations).
+- [`scripts/script_compiler_extras.py`](../scripts/script_compiler_extras.py)
+  — control-flow lowering (`if`/`else`/`while`/`for`) and multi-operand
+  expression emission. Verified against `16_loop`. See
+  [`script-control-flow.md`](script-control-flow.md).
+- The frame-offset rule for component-attribute access (`h0.val` →
+  `01 54 04 00 00`) from [`memory-allocation.md`](memory-allocation.md).
 
-a. **Component-attribute access** (e.g. `dim=h0.val`, `x0.bco=red.val`).
-   These compile to a local-var ref like `01 54 04 00 00` where
-   `0x454` is the frame offset of `h0.val` in the page's local
-   memory. Computing that offset needs a per-page
-   `(component_name, attr_name) → frame_offset` resolver. Trace
-   `appbianyi.mollocmemory_add` (~50 lines of IL in `hmitype.dll`)
-   to recover the allocation rule. See
-   [`script-compiler.md`](script-compiler.md).
+**What's left**: Stitch the three pieces into one compiler. Specifically:
 
-b. **Control-flow lowering** for `if`/`while`/`for`/`else`. The editor
-   does this in `appbianyi.chonggouifwhile` — rewrites the structured
-   construct to a flat sequence of `i` (cjmp) + `54 20 …` (jmp) +
-   labels. Encoder needs to compute branch offsets after emitting the
-   target.
-
-c. **Multi-operand expressions** (e.g. `x0.val=h0.val+5`). Today only
-   single-RHS-token assignments work. Needs a small expression parser
-   that emits in the canonical Nextion order (recovered from existing
-   compiled examples in the project TFT).
-
-**Why it's first**: gap #2's button-family init templates use `if/else`
-and several Text templates emit multi-step expressions, so the
-init-bytecode encoder can't reach 100% coverage until this lands.
-The script compiler is also the gating dependency for any project that
-has event handlers (which is almost all of them).
+- Wire `script_compiler_extras` into `script_compiler.py` as the
+  expression+control-flow front-end.
+- Implement the `(component, attr) → frame_offset` resolver using the
+  rule `obj.memorypos + Upatt0.attposup`. Needs the per-type
+  `_PARAM_Head` byte sizes (the one open gap from
+  [`memory-allocation.md`](memory-allocation.md)) — pull these from
+  `hmitype.dll!*_PARAM_Head` struct definitions.
+- Cover more event-handler patterns from `nextion/source/nextion.hmi.tft`
+  to widen the round-trip corpus beyond the current 8 pairs.
 
 ## 2. Finish the per-component init-bytecode encoder
 
 **Where it stands**: [`scripts/tft_init_encoder.py`](../scripts/tft_init_encoder.py)
-round-trips XFloat / QRCode / Picture / Page byte-for-byte. Templates
-extracted for every visible component type.
+round-trips XFloat / QRCode / Picture / Page. The Text `setbrush`
+sub-variant dispatch is now fully understood
+([`text-setbrush-variant.md`](text-setbrush-variant.md)): per-type
+`attposup == -1` → emit attribute value as ASCII literal; otherwise →
+LOAD operand.
 
 **What's left**:
 
-a. **Button-family templates** (Button, DualStateButton, type-3 Hotspot
-   refresh) — these use `if (val==1) { …pressed colours… } else
-   { …released colours… }`. Blocked on the control-flow piece of the
-   script compiler (item 1b).
-
-b. **Text `setbrush` sub-variant** — when `spax`/`spay` are zero, the
-   editor inlines them as ASCII literals rather than emitting a LOAD
-   operand. Detection logic needed in the encoder.
-
-c. **Variable-length attribute references** — strings (`txt`, `path`)
-   and arrays are stored in a separate memory area pointed to by
-   `attmemorypos`. Allocation rule lives in
-   `appbianyi.mollocmemory_add`. Same target as item 1a.
+- Apply the per-type `attposup == -1` rule to Text / Button / Button_T
+  emission inside `tft_init_encoder.py`. The full per-type attribute
+  list with `attposup` values is in
+  [`attribute-records.md`](attribute-records.md).
+- Button-family templates use `if (val==1) { … } else { … }` — wire
+  in the integrated script compiler (item 1) to compile those.
+- Variable-length attribute storage (strings, picture data, curve
+  buffers) — the allocator is now mapped
+  ([`memory-allocation.md`](memory-allocation.md)); implement the
+  `Sstr`/`molloc`/`binary` allocation paths.
 
 ## 3. Build the attribute-record encoder
 
 **Where it stands**: [`scripts/tft_attrs.py`](../scripts/tft_attrs.py)
-**decodes** the per-page 24-byte `binattinf` table; per-type attribute
-layouts are documented in
+**decodes** the per-page 24-byte `binattinf` table; the writer chain
+in `hmitype.dll` is fully mapped in
 [`attribute-records.md`](attribute-records.md).
 
-**What's left**: the **encoder** side. Take a list of components with
-their authored attribute values and emit:
+**What's left**: Translate the writer chain
+(`UpAttsMake.addatt` → `Attmake.attinfUpToBin` →
+`mpage.Allattbytes_set` → `mobj.attpianyiset`) into Python. Given a
+list of components with authored attribute values, emit:
 
 - Each page's `allattbytes` (24 bytes per attribute, concatenated).
-- Each component's `Attstrpianyi` (180-byte block on F-series; first
-  4 bytes = byte offset of this component's init bytecode within
-  `strdata`, remainder = u16 indexes back into the page table).
+- Each component's `Attstrpianyi` (180 bytes on F-series): 4-byte
+  init-bytecode offset followed by u16 record indexes.
 
-Writer chain in `hmitype.dll` is mapped already
-([`attribute-records.md`](attribute-records.md)) — this is a
-mechanical translation of `mpage.Allattbytes_set` + `mobj.attpianyiset`
-to Python.
+Mechanical work — no further disassembly needed.
 
-## 4. Global memory directory writer
+## 4. `appinf1` (H2) population helper
 
-**Where it stands**: First u32 of the usercode region is the directory
-size in bytes; subsequent u32s are `(offset, size)` or `(offset, count)`
-tuples. Adding a single `int` local grows the directory by 4 bytes and
-shifts two internal pointer fields by +4 (one observation).
+**Where it stands**: The 76-byte `appinf1` schema is fully decoded
+([`format-tft.md`](format-tft.md#header-2-appinf1-196-bytes-encrypted)).
+The 120-byte trailing region is literal `0xff` padding
+([`h2-trailing.md`](h2-trailing.md)).
 
-**What's left**: Pin down the layout with either:
+**What's left**: Implement
+`compute_appinf1(body_layout) -> bytes` — a mechanical pass that fills
+every address and count field from the body's section sizes (pages,
+components, pictures, fonts, etc.), then appends `b'\xff' * 120`
+before handing off to `h2_cipher.encrypt`.
 
-- **Disassembly path**: trace `appbianyi.mollocmemory_add` in
-  `hmitype.dll`. Same routine flagged by items 1a and 2c, so this work
-  benefits all three. Expected ~50 lines of IL.
-- **Experiment path**: save 5 small projects with progressively more
-  local-int declarations (0, 1, 2, 3, 5 locals) and inspect the
-  directory growth pattern byte-by-byte.
+## 5. `main.HMI` writer
 
-The disassembly path is preferred — three other items already need
-the same routine read.
+**Where it stands**: Full 96-byte `hmifilehead` schema decoded
+([`main-hmi-config.md`](main-hmi-config.md) + the updated layout in
+[`format-hmi.md`](format-hmi.md#mainhmi-blob-project-manifest)). Only
+the `Modelcrc` field varies between F-series models; everything else
+is project-content-driven.
 
-## 5. `appinf1` (H2) population
+**What's left**: Implement `write_main_hmi(project) -> bytes`:
 
-**Where it stands**: Schema is fully decoded
-([`format-tft.md`](format-tft.md#header-2-appinf1-196-bytes-encrypted)
-with corrections from [`attribute-records.md`](attribute-records.md));
-encrypt/decrypt round-trips losslessly via
-[`scripts/h2_cipher.py`](../scripts/h2_cipher.py).
+- Fill every field from the project metadata.
+- Compute the blob CRC over `[+0x04..end]` using the same five-segment
+  chained CRC-32/MPEG-2 (try the page-CRC family first; if it doesn't
+  match, this is the one place [`format-hmi.md`'s H5](format-hmi.md)
+  open question lands).
+- Emit the trailing `(ext, name)` ref array in declaration order.
 
-**What's left**:
+## 6. End-to-end author CLI
 
-a. **Compute every address/count from body content** — a mechanical
-   pass once all the sub-section sizes are known (pages, components,
-   pictures, fonts, etc.). Implement as a single
-   `compute_appinf1(body_layout) -> bytes` helper.
-
-b. **Trailing 120 bytes** (`H2[0x114..0x18c]`) — four ~32-byte rows
-   that decrypt to plausibly-structured data. Either:
-   - Run the `23_minimal_project` experiment from
-     [`experiments.md`](experiments.md#stable-region-decode-advances-h2-trailing-region)
-     to isolate per-component vs. per-page rows.
-   - Find the writer in `appbianyi` and decode directly.
-
-## 6. `main.HMI` manifest writer
-
-**Where it stands**: Top-level layout is mapped per
-[`format-hmi.md`](format-hmi.md#mainhmi-blob-project-manifest). Three
-unknowns remain in bytes `0x0C..0x60` (per-display config).
-
-**What's left**: Per-display config is model-specific. For a
-single-model toolchain, copy the bytes verbatim from a known-good file
-of the same model — that's enough to produce valid output. A
-model-agnostic toolchain needs:
-
-- **Disassembly path**: find the config table in `hmitype.dll`'s model
-  registry. Almost certainly a switch/dictionary keyed by `model_crc`.
-- **Hardware path**: collect HMIs from a second model and diff against
-  the existing one. Blocked on physical hardware variety.
-
-## 7. End-to-end author CLI
-
-**Where it stands**: All the individual encoders exist as research
-scripts. Nothing stitches them together.
+**Where it stands**: All the individual encoders and helpers either
+exist or are one-step-away from existing (items 1-5).
 
 **What's left**:
 
-- A `scripts/author_tft.py` (and matching `author_hmi.py`) that takes
-  a project description (pages, components, scripts, fonts, pictures)
-  and emits a valid `.tft`+`.HMI` pair.
+- `scripts/author_tft.py` and `scripts/author_hmi.py` that take a
+  project description (pages, components, scripts, fonts, pictures)
+  and emit a valid `.tft`+`.HMI` pair.
 - A round-trip validator: re-author a known editor output and diff
-  against the original byte-for-byte. Tolerance only for fields the
-  editor itself non-deterministically populates (none today; saves are
-  deterministic — see
-  [`format-hmi.md`](format-hmi.md#append-only-journal)).
-- Eventually a higher-level project format (YAML/JSON) so users don't
-  hand-author the intermediate representation.
+  against the original byte-for-byte. Pure no-change saves are
+  byte-deterministic (see
+  [`format-hmi.md`](format-hmi.md#append-only-journal)), so the diff
+  should be empty.
+- A higher-level project format (YAML/JSON) so the IR is hand-editable.
 
 ## Recommended order of attack
 
-1. **Disassemble `appbianyi.mollocmemory_add`** in `hmitype.dll`. One
-   read unblocks items 1a, 2c, 4. Expected: a couple hours.
-2. **Finish the script compiler** (items 1b, 1c) — needed by the
-   button-family init templates and by all non-trivial event handlers.
-3. **Finish the init-bytecode encoder** (items 2a, 2b) — completes
-   per-component coverage.
-4. **Build the attribute-record encoder** (item 3) — the last
-   per-component piece; mechanical translation of the already-mapped
-   writer chain.
-5. **Global memory directory writer** (item 4) — small, but blocking
-   for any authored TFT.
-6. **`appinf1` population helper** (item 5a) — mechanical.
-7. **First authored TFT**: empty project, one blank page. Round-trip
-   validate. This is the milestone where the pipeline first produces
-   a device-loadable file from scratch.
-8. **Trailing `H2[0x114..0x18c]` rows** (item 5b) — needed for any
-   project beyond the minimal case.
-9. **`main.HMI` for the single-model case** (item 6) — copy-bytes path.
-10. **`author_tft.py` / `author_hmi.py` glue** (item 7).
+1. **Item 1** — integrate the script compiler pieces. Unblocks the
+   Text/Button-family templates in item 2 and gives every later
+   encoder access to expressions/control flow.
+2. **Item 2** — finish init-bytecode encoder coverage. Round-trip the
+   full project TFT's per-component blocks. (Pull the `_PARAM_Head`
+   table during this work since it's needed for item 1's resolver
+   anyway.)
+3. **Item 3** — attribute-record encoder. Mechanical.
+4. **Item 4** — `appinf1` writer. Mechanical.
+5. **Item 5** — `main.HMI` writer. Mechanical apart from the CRC
+   variant question.
+6. **First authored TFT**: empty project, one blank page. Round-trip
+   validate against an editor-saved empty project.
+7. **Item 6** — full author CLI. Round-trip the full project.
 
-## Disassembly vs. experiment
+## Open disassembly leads
 
-For the remaining items:
+Small things flagged by the recent disassembly batch but not blocking:
 
-| Item                                  | Best attack                          |
-|---------------------------------------|--------------------------------------|
-| 1a Component-attribute resolver       | Disassembly (`mollocmemory_add`)     |
-| 1b Control-flow lowering              | Disassembly (`chonggouifwhile`)      |
-| 1c Multi-operand expressions          | Disassembly + corpus cross-check     |
-| 2a Button-family init templates       | Blocked on 1b                        |
-| 2b Text `setbrush` sub-variant        | Disassembly + corpus cross-check     |
-| 3 Attribute-record encoder            | Disassembly (writer chain mapped)    |
-| 4 Global memory directory             | Disassembly (`mollocmemory_add`)     |
-| 5a `appinf1` address/count compute    | Mechanical, given body layout        |
-| 5b H2 trailing rows                   | Experiment first, disasm to verify   |
-| 6 `main.HMI` per-display config       | Copy bytes; disasm for multi-model   |
-| 7 End-to-end CLI                      | Implementation only                  |
-
-**Item 1 (`mollocmemory_add`) is the highest-leverage single read** —
-it unblocks the script compiler's remaining work, the init-encoder's
-variable-length attributes, and the global memory directory writer in
-one pass.
+- **`_PARAM_Head` byte-size table** per component type — needed for
+  the frame-offset resolver in item 1. Likely an `int[]` constant in
+  `hmitype.dll` or a per-`GuiObj_<kind>` static field. ~10-line read.
+- **`&&` logical-AND in `chonggouifwhile`** — corpus has `||` only;
+  the IL for `&&` looks symmetric but is not yet corpus-verified.
+- **`L <addr>` opcode preceding every loop** — encoder emits a dummy
+  value; the actual semantics (label table? source-map for debugger?)
+  are not yet pinned.
+- **`encode`-related scrambling** observed on `15_picture` /
+  `17_more_components` fixtures (noted in
+  [`memory-allocation.md`](memory-allocation.md)). Affects byte
+  ordering within string-attribute init data.
 
 ## Out of scope
 
-- **Tombstone/compaction policy** — a from-scratch writer can simply
-  never emit tombstones. Only matters for a writer that round-trips
-  edits while preserving editor undo history.
-- **Multi-model `main.HMI` config table** — needs physical access to
-  additional display models, blocked.
+- **Tombstone/compaction policy** — a from-scratch writer never emits
+  tombstones; only matters for a writer that round-trips edits while
+  preserving editor undo history.
+- **Multi-model `main.HMI` config** — only `Modelcrc` varies between
+  F-series models, so a single u32 input from the user covers it. No
+  separate table needed.

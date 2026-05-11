@@ -68,22 +68,52 @@ the compilation pipeline is deterministic.
 
 ## main.HMI blob (project manifest)
 
-The directory entry named `main.HMI` is a small project-level manifest:
+The directory entry named `main.HMI` is a 96-byte `hmifilehead` header
+followed by a per-resource reference array. Layout per
+`hmitype.dll!hmifilehead` (see
+[`main-hmi-config.md`](main-hmi-config.md) for the disassembly trace):
 
 ```
-+0x00   u32   blob crc/hash
-+0x04   u32   ?                    (observed: 0x60 — header_size?)
-+0x08   u32   model-id CRC         (e.g. 0x1ce47603 = NX4832F035_011)
-+0x0C   bytes ?                    (per-display config; not decoded)
-+0x60   ref[N] of (8 bytes ext, 8 bytes name)
-                                   each entry has the form
-                                   { "zi" or "pa" left-padded with NULs } +
-                                   { "N.zi" or "N.pa" left-padded with NULs }
++0x00   u32   crc                       # blob CRC (chained CRC-32/MPEG-2)
++0x04   u32   Datasize                  # always 0x60 (header size)
++0x08   u8    upver0                    # editor major version stamp
++0x09   u8    upver1                    # editor minor; legacy gate
++0x0a   u8    filever                   # file-format magic 0x21
++0x0b   u8    xiliemark                 # series mark (0x64 = 100 = F-series)
++0x0c   u8    guidire                   # GUI direction / orientation (0..3)
++0x0d   u8    encode                    # text encoding id
++0x0e   u8    hmiffid                   # HMI format magic 0x4f
++0x0f   u8    otp                       # OTP protection flag
++0x10   u32   Modelcrc                  # CRC of model name (e.g. 0x1ce47603 = NX4832F035_011)
++0x14   u32   password                  # project lock password (0 = none)
++0x18   u32   ResourcesFileTypeAddr     # offset of resource-ref array (= 0x60)
++0x1c   u32   ResourcesFileQyt          # number of resource entries (pages + fonts)
++0x20   i32   MemoryFileSystemLenth     # embedded-FS length (0 unless project ships extras)
++0x24   u8    upver2                    # patch-version stamp
++0x25   u8    RAM1OPEN                  # 1 if RAM1 expansion enabled
++0x26   u8    resourcescancel_font      # flag: omit fonts on download
++0x27   u8    resourcescancel_pic       # flag: omit pictures
++0x28   u32   APPMEDATAHEX0             # 6×u32: MemoryFS hex metadata (zeroed if no MemoryFS)
++0x2c   u32   APPMEDATAHEX1
++0x30   u32   APPMEDATAHEX2
++0x34   u32   APPMEDATAHEX3
++0x38   u32   APPMEDATAHEX4
++0x3c   u32   APPMEDATAHEX5
++0x40   u8    TT_asp100_tc              # asp100 calibration flag
++0x41   u8    picencodever              # picture-encoding version (2 in 1.67.x)
++0x42   u16   res1                      # reserved
++0x44   u32   ...reserved/unused tail (0)
++0x60   ref[ResourcesFileQyt] of (8 bytes ext, 8 bytes name)
+                                       # ext  = "zi" or "pa" left-padded with NULs
+                                       # name = "N.zi"/"N.pa" left-padded with NULs
 ```
 
 The trailing reference array lists every resource the project declares
 (fonts and pages, by stem). Order is the declaration order, not the
 directory order.
+
+Earlier writeups put the `Modelcrc` field at `+0x08`; that was off by
+8. The real layout above came from `hmitype.dll!hmifilehead` IL.
 
 ## Page blob (`*.pa`)
 

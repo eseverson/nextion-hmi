@@ -27,7 +27,7 @@ the F-series device runtime.
 
 ## Authoring research
 
-Reverse-engineering deliverables for the three encoder gaps from
+Reverse-engineering deliverables for the encoder gaps from
 [`next-steps.md`](next-steps.md):
 
 - [`attribute-records.md`](attribute-records.md) — per-page 24-byte
@@ -44,6 +44,27 @@ Reverse-engineering deliverables for the three encoder gaps from
   compiler, located in `hmitype.appbianyi`. Minimal compiler:
   [`scripts/script_compiler.py`](../scripts/script_compiler.py),
   round-trips 8 source→bytecode pairs from the project corpus.
+- [`script-control-flow.md`](script-control-flow.md) — `if`/`else`/
+  `while`/`for` lowering rules + multi-operand expression emission.
+  Helper module:
+  [`scripts/script_compiler_extras.py`](../scripts/script_compiler_extras.py),
+  verified against the `16_loop` fixture (simple expressions, 4-level
+  if-elseif chain, `||` chain, while loop with back-jump).
+- [`memory-allocation.md`](memory-allocation.md) — `appbianyi.StructHtoL`
+  allocator and the frame-offset rule that turns `h0.val` into the
+  bytecode operand `01 54 04 00 00`. Decodes the global memory
+  directory at usercode offset 0.
+- [`text-setbrush-variant.md`](text-setbrush-variant.md) — Per-type
+  inline-vs-LOAD dispatch in `mobj.canshutihuan`: `attposup == -1`
+  forces inline ASCII regardless of the attribute's value. Closes the
+  Text/Button-family init-encoder gap.
+- [`main-hmi-config.md`](main-hmi-config.md) — Full schema of the
+  `main.HMI` 96-byte `hmifilehead` (no opaque per-display block);
+  only `Modelcrc` varies between F-series displays.
+- [`h2-trailing.md`](h2-trailing.md) — The 120 bytes after `appinf1`
+  in H2 are literal `0xff` padding, not a fingerprint. Verifier:
+  [`scripts/h2_trailing.py`](../scripts/h2_trailing.py) — 27/27
+  fixtures match.
 
 ## Roadmap
 
