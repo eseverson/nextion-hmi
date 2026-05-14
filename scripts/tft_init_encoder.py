@@ -32,6 +32,11 @@ from dataclasses import dataclass
 from typing import Callable, Iterable
 import struct
 
+from script_compiler_extras import (
+    emit_cjmp, emit_jmp, convert_entry_to_byte_distances,
+    flatten_cglist, COMPARATOR_ENDID,
+)
+
 
 # -- Type-ID → human label ------------------------------------------
 
@@ -149,10 +154,17 @@ OPCODE: dict[str, bytes] = {
 
 def _setbrush(sta: int, bco_attr: str = "picc", *, mode: int | None = None,
               pw_attr: str = "pw_literal", pw_value: str = "0",
-              trailing: str = "0") -> tuple:
+              trailing: str = "0",
+              inline_spax_spay: bool = False) -> tuple:
     """Build a `setbrush` template per the editor's sta-dispatch.
 
     arg7 = the colour/picture/0 in position 7 (the third color arg).
+
+    When ``inline_spax_spay`` is True, spax and spay are emitted as
+    ASCII decimal literals (``('inline_attr', ...)``), not as LOAD
+    operands.  This applies to text (116), button (98), and button_t
+    (53), whose ``attposup`` for spax/spay is -1 in the editor's
+    attribute schema (compile-time constant, no RAM backing).
     """
     if mode is None:
         mode = sta
@@ -175,16 +187,18 @@ def _setbrush(sta: int, bco_attr: str = "picc", *, mode: int | None = None,
         args += [('lit', '0')]
     else:
         raise ValueError(f"unknown sta={sta}")
+    spax_arg = ('inline_attr', 'spax') if inline_spax_spay else ('attr', 'spax')
+    spay_arg = ('inline_attr', 'spay') if inline_spax_spay else ('attr', 'spay')
     args += [
         ('lit', ','),
         ('attr', 'xcen'), ('lit', ','),
         ('attr', 'ycen'), ('lit', ','),
         ('lit', str(mode)), ('lit', ','),
         ('attr', 'isbr'), ('lit', ','),
-        ('attr', 'spax'), ('lit', ','),
-        ('attr', 'spay'), ('lit', ','),
+        spax_arg, ('lit', ','),
+        spay_arg, ('lit', ','),
     ]
-    # arg14 — `pw` for text, literal 0 for others
+    # arg14 — `pw` for text (LOAD), literal 0 for others (inline)
     if pw_attr == "pw":
         args += [('attr', 'pw')]
     else:
@@ -289,7 +303,8 @@ def ref_templates(comp_type: int, attrs: dict) -> list[tuple]:
 
     if label in ("text", "gtext"):
         draw = _zstr_txt() if label == "text" else _zstr_vvs_txt()
-        sb = _setbrush(sta, mode=sta, pw_attr=("pw" if label == "text" else "pw_literal"))
+        sb = _setbrush(sta, mode=sta, pw_attr=("pw" if label == "text" else "pw_literal"),
+                       inline_spax_spay=True)
         return [sb, draw]
 
     if label == "pic":
@@ -320,10 +335,10 @@ def ref_templates(comp_type: int, attrs: dict) -> list[tuple]:
         return [
             ('if', [('lit', "'&val&'==1")]),
             ('lbrace', []),
-            _setbrush_buttoncolours(pressed=True, sta=sta),
+            _setbrush_buttoncolours(pressed=True, sta=sta, inline_spax_spay=True),
             ('rbrace_else', []),
             ('lbrace', []),
-            _setbrush_buttoncolours(pressed=False, sta=sta),
+            _setbrush_buttoncolours(pressed=False, sta=sta, inline_spax_spay=True),
             ('rbrace', []),
             _zstr_txt(),
         ]
@@ -332,10 +347,10 @@ def ref_templates(comp_type: int, attrs: dict) -> list[tuple]:
         return [
             ('if', [('lit', "'&val&'==1")]),
             ('lbrace', []),
-            _setbrush_buttoncolours(pressed=True, sta=sta),
+            _setbrush_buttoncolours(pressed=True, sta=sta, inline_spax_spay=True),
             ('rbrace_else', []),
             ('lbrace', []),
-            _setbrush_buttoncolours(pressed=False, sta=sta),
+            _setbrush_buttoncolours(pressed=False, sta=sta, inline_spax_spay=True),
             ('rbrace', []),
             _zstr_txt(),
         ]
@@ -399,9 +414,17 @@ def ref_templates(comp_type: int, attrs: dict) -> list[tuple]:
     return []
 
 
-def _setbrush_buttoncolours(*, pressed: bool, sta: int) -> tuple:
+def _setbrush_buttoncolours(*, pressed: bool, sta: int,
+                             inline_spax_spay: bool = False) -> tuple:
     """Helper: button's setbrush uses pco2/picc2 when pressed,
-    pco/picc when released."""
+    pco/picc when released.
+
+    When ``inline_spax_spay`` is True, spax and spay are emitted as
+    ASCII decimal literals instead of LOAD operands.  Required for
+    button (98) and button_t (53) whose spax/spay have ``attposup == -1``
+    in the editor's attribute schema.  pw is also -1 for these types,
+    so it is always emitted as a literal ``'0'`` here.
+    """
     color_pair = ('pco2', 'picc2') if pressed else ('pco', 'picc')
     if sta == 1:
         # border-mode uses bco/bco2 instead of picc/picc2
@@ -409,6 +432,8 @@ def _setbrush_buttoncolours(*, pressed: bool, sta: int) -> tuple:
     elif sta == 2:
         # pic mode uses pic2/pic
         color_pair = (color_pair[0], 'pic2' if pressed else 'pic')
+    spax_arg = ('inline_attr', 'spax') if inline_spax_spay else ('attr', 'spax')
+    spay_arg = ('inline_attr', 'spay') if inline_spax_spay else ('attr', 'spay')
     return ('setbrush', [
         ('coord', 'x'), ('lit', ','),
         ('coord', 'y'), ('lit', ','),
@@ -421,8 +446,8 @@ def _setbrush_buttoncolours(*, pressed: bool, sta: int) -> tuple:
         ('attr', 'ycen'), ('lit', ','),
         ('lit', str(sta)), ('lit', ','),
         ('attr', 'isbr'), ('lit', ','),
-        ('attr', 'spax'), ('lit', ','),
-        ('attr', 'spay'), ('lit', ','),
+        spax_arg, ('lit', ','),
+        spay_arg, ('lit', ','),
         ('lit', '0'), ('lit', ','),
         ('lit', '0'),
     ])
@@ -475,6 +500,12 @@ def _emit_arg(arg, x, y, w, h, comp_id, page_id, attrs, attr_addr) -> bytes:
     if kind == 'attr':
         # Resolve the attribute's LOAD address via callback.
         return _load_op(attr_addr(arg[1]))
+    if kind == 'inline_attr':
+        # Emit the attribute's current value as ASCII decimal (no LOAD).
+        # Used for attributes whose attposup == -1 in the editor schema
+        # (compile-time constant, no RAM slot): spax/spay for text/button/button_t.
+        value = str(attrs.get(arg[1], 0))
+        return value.encode("ascii")
     if kind == 'long':
         return _long_lit(arg[1])
     if kind == 'expr':
@@ -523,6 +554,61 @@ def _emit_line(line: tuple, x, y, w, h, comp_id, page_id, attrs, attr_addr) -> b
     return bytes(body)
 
 
+# -- Button/Button_T control-flow encoder ---------------------------
+
+def _encode_button_init(
+    comp: "Component",
+    attr_addr: Callable[[str], int],
+) -> bytes:
+    """Encode the button/button_t Ref event using if/else control flow.
+
+    Emits:
+        if(val==1) { setbrush_pressed } else { setbrush_released }
+        zstr_txt
+
+    This bypasses the normal ``_emit_line`` path because the if/else
+    structure requires ``script_compiler_extras`` to emit cjmp/jmp
+    opcodes and patch byte-distance targets.
+
+    The cglist layout is:
+        [0] cjmp(val != 1, jump 2 entries → past pressed body + jmp)
+        [1] setbrush_pressed body
+        [2] jmp(1 entry → past released body)
+        [3] setbrush_released body
+        [4] zstr_txt body
+    """
+    sta = int(comp.attrs.get('sta', 0))
+    x, y, w, h = comp.x, comp.y, comp.w, comp.h
+    page_id, comp_id = comp.page_id, comp.comp_id
+    attrs = comp.attrs
+
+    def emit(line: tuple) -> bytes:
+        return _emit_line(line, x, y, w, h, comp_id, page_id, attrs, attr_addr)
+
+    # Build the three body blocks.
+    pressed_body = emit(_setbrush_buttoncolours(pressed=True, sta=sta, inline_spax_spay=True))
+    released_body = emit(_setbrush_buttoncolours(pressed=False, sta=sta, inline_spax_spay=True))
+    zstr_body = emit(_zstr_txt())
+
+    # Build the cjmp: if(val == 1) → negated to cjmp(val != 1, skip pressed body + jmp)
+    # The branch target is entry-distance = 2 (skip entries [1] and [2]).
+    lhs = _load_op(attr_addr("val"))
+    rhs = b"1"
+    endid_neq = COMPARATOR_ENDID["!="]   # 6 — negation of == for if(val==1)
+    cjmp_body = emit_cjmp(lhs, rhs, endid_neq, placeholder_int=2)
+
+    # jmp to skip the released body (entry-distance = 1).
+    jmp_body = emit_jmp(1)
+
+    cglist: list[bytes] = [cjmp_body, pressed_body, jmp_body, released_body, zstr_body]
+
+    # Stage 2: convert entry distances to byte distances.
+    cjmp_template = cjmp_body[:3]
+    convert_entry_to_byte_distances(cglist, cjmp_template)
+
+    return flatten_cglist(cglist)
+
+
 # -- Public API -----------------------------------------------------
 
 @dataclass
@@ -553,6 +639,10 @@ def encode_init_block(
     Returns ``b""`` if the type has no Ref-event templates (Hotspot,
     Timer, Variable, Slider, Waveform, CropPicture).
     """
+    label = TYPE_LABELS.get(comp.comp_type, "")
+    if label in ("button", "button_t"):
+        return _encode_button_init(comp, attr_addr)
+
     templates = ref_templates(comp.comp_type, comp.attrs)
     if not templates:
         return b""
@@ -701,10 +791,67 @@ def _self_test_page():
     return True
 
 
+def _self_test_text():
+    """Verify a Text component's setbrush block emits spax/spay as
+    ASCII literals (inline_attr), not as LOAD operands.
+
+    Fixture: text at (0, 69, 160, 31), sta=1, style=4, spax=0, spay=0.
+    Observed at file offset 0x806dd in
+    ``tests/editor outputs/17_more_components/17.tft``.
+
+    Attribute addresses extracted from the observed bytecode:
+      font=457, pco=459, bco=458, xcen=460, ycen=461,
+      isbr=465, pw=462, txt=463.
+
+    The test verifies only the setbrush block (block 0), because the
+    zstr block in this fixture uses ``09 17 04`` (not ``09 15 04``) and
+    long-form int literals for 32767 — both are pre-existing
+    OPCODE/literal-encoding differences that are not in scope here.
+    """
+    observed_addrs = {
+        'font': 457, 'pco': 459, 'bco': 458,
+        'xcen': 460, 'ycen': 461,
+        'isbr': 465, 'pw': 462, 'txt': 463,
+        # spax/spay are inline — attr_addr will NOT be called for them
+    }
+
+    def addr(name: str) -> int:
+        if name not in observed_addrs:
+            raise KeyError(f"attr_addr called for {name!r} — should be inline")
+        return observed_addrs[name]
+
+    comp = Component(
+        comp_type=116, comp_id=2, page_id=0,
+        x=0, y=69, w=160, h=31,
+        attrs={'sta': 1, 'style': 4, 'spax': 0, 'spay': 0},
+    )
+
+    blob = encode_init_block(comp, addr)
+    # Disassemble the first block (setbrush) only — zstr block 2 uses a
+    # different opcode byte and long-literal encoding not yet emulated.
+    blocks = disassemble_blocks_to_lines(blob)
+    assert blocks, "expected at least one block from Text encoder"
+    _len_prefix, setbrush_body = blocks[0]
+
+    expected_setbrush = bytes.fromhex(
+        "091d08302c36392c3136302c33312c01c90100002c01cb0100002c"
+        "01ca0100002c01cc0100002c01cd0100002c312c01d10100002c"
+        "302c302c01ce0100002c30"
+    )
+    if setbrush_body != expected_setbrush:
+        print("TEXT SETBRUSH MISMATCH")
+        print(f"  got:      {setbrush_body.hex()}")
+        print(f"  expected: {expected_setbrush.hex()}")
+        return False
+    print("OK: Text (0,69,160,31) sta=1 setbrush emits spax/spay as inline ASCII literals")
+    return True
+
+
 if __name__ == "__main__":
     ok = _self_test()
     ok = _self_test_qrcode() and ok
     ok = _self_test_picture() and ok
     ok = _self_test_page() and ok
+    ok = _self_test_text() and ok
     if not ok:
         import sys; sys.exit(1)

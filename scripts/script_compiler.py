@@ -125,6 +125,10 @@ class CompileContext:
     the global-memory frame. Each `int` slot is 4 bytes — the first
     one is at offset 0, the second at offset 4, etc. Auto-populated
     when an `int <name>` declaration is encountered."""
+    component_offsets: dict[str, int] = field(default_factory=dict)
+    """Map from "comp.attr" → absolute public-memory byte offset.
+    Populated by the caller from the memory allocator or from parsed
+    TFT data. Used to resolve component-attribute refs in scripts."""
 
     def __post_init__(self):
         insn_set = _find_instruction_set(self.editor_version, self.model)
@@ -152,6 +156,27 @@ class CompileContext:
     def opcode_bytes(self, name: str) -> bytes:
         size_class, idx = self._op_lookup[name]
         return bytes([0x09, idx, size_class])
+
+    def resolve_atom(self, name: str) -> bytes:
+        """Resolve an expression atom (identifier, dotted comp.attr) to
+        its operand bytes. Integer literals are handled separately by the
+        expression compiler and are NOT routed through here."""
+        if "." in name:
+            if name in self.component_offsets:
+                off = self.component_offsets[name]
+                return bytes([LOCAL_PREFIX]) + struct.pack("<I", off)
+            raise ValueError(
+                f"unknown component attribute {name!r}: add it to "
+                f"CompileContext.component_offsets"
+            )
+        if self.is_sysvar(name):
+            return self.sysvar_operand(name)
+        if self.is_global(name):
+            return self.global_operand(name)
+        raise ValueError(
+            f"unknown identifier {name!r}: not a sysvar, declared global, "
+            f"or component attribute"
+        )
 
 
 # -- Lowering primitives ---------------------------------------------------
@@ -293,6 +318,129 @@ def compile_block(source: str, ctx: CompileContext | None = None) -> bytes:
     return struct.pack("<I", len(body)) + body
 
 
+# -- Full compiler (control flow + component attributes) -------------------
+
+# Regex patterns for control-flow line recognition.
+_IF_RE    = re.compile(r"^\s*if\s*\((.+)\)\s*\{?\s*$")
+_ELIF_RE  = re.compile(r"^\s*\}\s*else\s+if\s*\((.+)\)\s*\{?\s*$")
+_ELSE_RE  = re.compile(r"^\s*\}\s*else\s*\{?\s*$")
+_CLOSE_RE = re.compile(r"^\s*\}\s*$")
+_WHILE_RE = re.compile(r"^\s*while\s*\((.+)\)\s*\{?\s*$")
+_FOR_RE   = re.compile(r"^\s*for\s*\((.+)\)\s*\{?\s*$")
+
+
+def compile_event_handler(source: str, ctx: CompileContext | None = None) -> bytes:
+    """Full event-handler compiler: control flow, component-attribute refs,
+    and multi-operand expressions.
+
+    Returns cglist-flattened bytes — each statement / control-flow construct
+    is a separate length-prefixed entry, matching the on-disk TFT format.
+
+    Unlike compile_handler / compile_block (which concatenate all statements
+    into one block), this function produces the per-entry-prefixed format that
+    the Nextion runtime expects for event handlers with branching.
+
+    Supported syntax on top of compile_handler:
+        - Component-attribute refs: ``h0.val``, ``x0.bco``
+          (requires ctx.component_offsets populated by caller)
+        - Control flow: ``if``, ``else if``, ``else``, ``while``, ``for``
+        - Multi-operand arithmetic: ``x0.val = x1.val + x2.val - 10``
+    """
+    from script_compiler_extras import (
+        compile_expression, split_condition,
+        emit_if_chain, patch_close, patch_close_with_else,
+        convert_entry_to_byte_distances, flatten_cglist,
+        IfFrame,
+    )
+
+    if ctx is None:
+        ctx = CompileContext()
+
+    cglist: list[bytes] = []
+    ifstack: list[IfFrame] = []
+    cjmp_template_ref: list[bytes | None] = [None]
+
+    def resolve(name: str) -> bytes:
+        return ctx.resolve_atom(name)
+
+    for raw_line in source.splitlines():
+        line = raw_line.split("//", 1)[0].strip()
+        if not line:
+            continue
+
+        # --- control-flow dispatch -----------------------------------------
+        m = _IF_RE.match(line)
+        if m:
+            clauses = split_condition(m.group(1).strip())
+            emit_if_chain(clauses, cglist, ifstack, resolve, cjmp_template_ref)
+            continue
+
+        m = _ELIF_RE.match(line)
+        if m:
+            clauses = split_condition(m.group(1).strip())
+            patch_close_with_else(cglist, ifstack, "else if",
+                                  new_clauses=clauses,
+                                  resolve_atom_expr=resolve,
+                                  cjmp_template_ref=cjmp_template_ref)
+            continue
+
+        if _ELSE_RE.match(line):
+            patch_close_with_else(cglist, ifstack, "else")
+            continue
+
+        if _CLOSE_RE.match(line):
+            patch_close(cglist, ifstack, resolve)
+            continue
+
+        m = _WHILE_RE.match(line)
+        if m:
+            slot = len(cglist)
+            frame = IfFrame(Lei="if", endstr=[f"T {slot}"])
+            clauses = split_condition(m.group(1).strip())
+            emit_if_chain(clauses, cglist, ifstack, resolve,
+                          cjmp_template_ref, frame_in=frame)
+            continue
+
+        m = _FOR_RE.match(line)
+        if m:
+            inner = m.group(1)
+            parts = inner.split(";", 2)
+            if len(parts) != 3:
+                raise ValueError(f"for-loop header must have exactly two ';': {line!r}")
+            init_s, cond_s, inc_s = (p.strip() for p in parts)
+            if init_s:
+                cglist.append(compile_expression(init_s, resolve))
+            slot = len(cglist)
+            frame = IfFrame(Lei="for", endstr=[inc_s, f"T {slot}"])
+            clauses = split_condition(cond_s)
+            emit_if_chain(clauses, cglist, ifstack, resolve,
+                          cjmp_template_ref, frame_in=frame)
+            continue
+
+        # --- simple statements ---------------------------------------------
+
+        # `int <name>...` — update globals, emit nothing
+        dm = _INT_DECL_RE.match(line)
+        if dm:
+            _compile_statement(line, ctx)
+            continue
+
+        # `page N`, `printh ...`, `print "..."` — compile via existing handler
+        if (re.match(r"^\s*page\s+\d+\s*$", line)
+                or re.match(r"^\s*printh\s+", line)
+                or re.match(r'^print\s+"', line)):
+            entry = _compile_statement(line, ctx)
+            if entry:
+                cglist.append(entry)
+            continue
+
+        # General expression (assignment, call with `=`-assignment, etc.)
+        cglist.append(compile_expression(line, resolve))
+
+    convert_entry_to_byte_distances(cglist, cjmp_template_ref[0])
+    return flatten_cglist(cglist)
+
+
 # -- Self-test -------------------------------------------------------------
 
 if __name__ == "__main__":
@@ -347,3 +495,59 @@ if __name__ == "__main__":
     assert got == expected, f"sys2=42: {got.hex()} vs {expected.hex()}"
 
     print("script_compiler self-test OK")
+
+    # -- compile_event_handler tests (use 16_loop byte-verified sequences) --
+    # Component-attribute offset map from the 16_loop fixture's public memory.
+    COMP_OFFSETS = {
+        "x0.val": 0x3c,  "x0.bco": 0x38,
+        "x2.val": 0x8e,  "x2.bco": 0x8a,
+        "x4.val": 0xe0,  "x4.bco": 0xdc,
+        "x5.val": 0xe9,  "x5.bco": 0xe5,
+        "x1.val": 0x109, "x1.bco": 0x105,
+        "x6.val": 0x165, "x6.bco": 0x161,
+        "x7.val": 0x17c, "x7.bco": 0x178,
+        "x8.val": 0x1a5, "x8.bco": 0x1a1,
+        "bco.val": 0x37b, "blu.val": 0x386, "red.val": 0x391,
+        "wht.val": 0x39c, "yel.val": 0x3a7, "org.val": 0x3b2,
+        "grn.val": 0x3bd,
+    }
+    ectx = CompileContext()
+    ectx.globals = {"sys0": 0x00, "qq": 0x0c}
+    ectx.component_offsets = COMP_OFFSETS
+
+    # Test: simple if/else (verified against 16.tft @ 0x70fad)
+    src_if_else = """\
+if(x8.val>0)
+x8.bco=red.val
+}else
+x8.bco=bco.val
+}"""
+    expected_if_else = bytes.fromhex(
+        "12000000" "09000401a50100002c302c332c031a000000"
+        "0b000000" "01a10100003d0191030000"
+        "07000000" "5420030f000000"
+        "0b000000" "01a10100003d017b030000"
+    )
+    got = compile_event_handler(src_if_else, ectx)
+    assert got == expected_if_else, (
+        f"if-else mismatch:\n  got      {got.hex()}\n"
+        f"  expected {expected_if_else.hex()}"
+    )
+
+    # Test: while loop (verified against 16.tft @ while-loop fixture)
+    src_while = """\
+while(qq<5)
+qq=qq+1
+}"""
+    expected_while = bytes.fromhex(
+        "12000000" "090004050c0000002c352c322c031c000000"
+        "0d000000" "050c0000003d050c0000002b31"
+        "07000000" "542003ceffffff"
+    )
+    got = compile_event_handler(src_while, ectx)
+    assert got == expected_while, (
+        f"while mismatch:\n  got      {got.hex()}\n"
+        f"  expected {expected_while.hex()}"
+    )
+
+    print("compile_event_handler self-test OK")
