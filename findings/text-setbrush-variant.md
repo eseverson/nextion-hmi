@@ -118,7 +118,7 @@ count: each inlined `0` costs 1 ASCII byte plus a comma, vs a LOAD costs
 
 ## Implications for the encoder
 
-`scripts/tft_init_encoder.py` already substitutes attribute names with
+`scripts/lib/tft_init_encoder.py` already substitutes attribute names with
 LOAD operands via the `attr_addr` callable. The needed change is to make
 spax/spay (and `pw` for Button_T/Button — `pw` is `objchangetype.no` in
 the same branch, default value `0`) emit a **literal** rather than a

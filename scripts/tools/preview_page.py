@@ -11,7 +11,7 @@ scripts (codesload/codesup/etc.) or font-correct text from the project's .zi
 files — text is rendered with a Liberation Mono substitute.
 
 Usage:
-    python3 scripts/preview_page.py [--hmi PATH] [--out DIR] [--scale N]
+    python3 scripts/tools/preview_page.py [--hmi PATH] [--out DIR] [--scale N]
 
 Outputs PNGs to --out (default: work/) named preview_<pagename>.png.
 """
@@ -20,7 +20,7 @@ import argparse
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from PIL import Image  # noqa: E402

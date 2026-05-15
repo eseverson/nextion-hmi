@@ -164,7 +164,7 @@ fields. Slot kinds observed:
 The pictures sub-block sits between `pictures_address` and
 `gmovs_address`. RGB565 LE images are stored uncompressed on
 F-series; Picture component records reference them by index. The
-slot-kind decoder in [`scripts/tft_format.py`](../scripts/tft_format.py)
+slot-kind decoder in [`scripts/lib/tft_format.py`](../scripts/lib/tft_format.py)
 walks every section.
 
 ### Usercode section (0x70000..file_size − 4)
@@ -238,8 +238,8 @@ TFTTool can read T0/K0 TFTs losslessly but breaks F-series:
 - It treats `H2+0x44` as the H2 content-end; on F-series that's wrong.
 
 For F-series, recompute CRCs manually and use
-[`scripts/h2_cipher.py`](../scripts/h2_cipher.py) for H2.
-[`scripts/patch_tft.py`](../scripts/patch_tft.py) implements a working
+[`scripts/lib/h2_cipher.py`](../scripts/lib/h2_cipher.py) for H2.
+[`scripts/tools/patch_tft.py`](../scripts/tools/patch_tft.py) implements a working
 in-place patcher that keeps every invariant correct.
 
 ## What's lossless to edit today

@@ -6,11 +6,11 @@ terminator. Pass commands as positional args, or pipe them via stdin
 (one per line).
 
 Usage:
-    scripts/send.py 'x0.val=12345' 's0.txt="Hello"' 'page settings'
-    echo 'x0.val=42' | scripts/send.py
-    scripts/send.py --host 192.168.1.10 --port 9999 'page main'
-    scripts/send.py --touch m0                       # click hotspot
-    scripts/send.py --state                          # fetch sim state via HTTP
+    scripts/sim/send.py 'x0.val=12345' 's0.txt="Hello"' 'page settings'
+    echo 'x0.val=42' | scripts/sim/send.py
+    scripts/sim/send.py --host 192.168.1.10 --port 9999 'page main'
+    scripts/sim/send.py --touch m0                       # click hotspot
+    scripts/sim/send.py --state                          # fetch sim state via HTTP
 """
 from __future__ import annotations
 import argparse

@@ -16,7 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 def _run_patcher(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
-        [sys.executable, str(REPO_ROOT / "scripts" / "patch_tft.py"), *args],
+        [sys.executable, str(REPO_ROOT / "scripts" / "tools" / "patch_tft.py"), *args],
         capture_output=True, text=True, check=True,
     )
 
@@ -38,7 +38,7 @@ def test_patch_round_trip(tft_path, tmp_path):
     # Independently decrypt the patched file and confirm pageqyt = 9 while
     # other appinf1 fields are unchanged.
     sys.path.insert(0, str(REPO_ROOT))
-    from scripts.h2_cipher import encrypt as h2_decrypt
+    from scripts.lib.h2_cipher import encrypt as h2_decrypt
 
     raw = out.read_bytes()
     model_crc = struct.unpack_from("<I", raw, 0x2e)[0]
@@ -56,7 +56,7 @@ def test_patch_h1_does_not_disturb_h2(tft_path, tmp_path):
                  "--u8", "0", "-o", str(out))
 
     sys.path.insert(0, str(REPO_ROOT))
-    from scripts.h2_cipher import encrypt as h2_decrypt
+    from scripts.lib.h2_cipher import encrypt as h2_decrypt
 
     orig_raw = tft_path.read_bytes()
     new_raw = out.read_bytes()

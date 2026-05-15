@@ -79,7 +79,7 @@ class TrailingCrcInfo:
 
 def parse(data: bytes) -> TftHeader:
     """Decrypt + slice the header layers from a complete TFT file."""
-    from scripts.h2_cipher import encrypt as _h2_decrypt  # asm-verbatim path = decrypt
+    from scripts.lib.h2_cipher import encrypt as _h2_decrypt  # asm-verbatim path = decrypt
     if len(data) < RESOURCES_START + 4:
         raise ValueError(f"file too small to be a TFT: {len(data)} bytes")
     model_crc = read_model_crc(data)
@@ -94,7 +94,7 @@ def parse(data: bytes) -> TftHeader:
 def trailing_crc_mask(data: bytes) -> TrailingCrcInfo:
     """Recover the trailing-CRC XOR mask from an existing valid TFT.
     The body CRC is over `data[:-4]`; the stored value is body XOR mask."""
-    from scripts.page_crc import crc32_bytewise
+    from scripts.lib.page_crc import crc32_bytewise
     stored = struct.unpack_from("<I", data, len(data) - 4)[0]
     body = crc32_bytewise(0xFFFFFFFF, data[:-4])
     return TrailingCrcInfo(stored=stored, mask=stored ^ body)
@@ -111,7 +111,7 @@ def extract_page_bco(data: bytes) -> int | None:
     so the most-frequent 16-bit color value in that region is the page
     bco. Returns None if the region can't be located.
     """
-    from scripts.h2_cipher import encrypt as h2_decrypt
+    from scripts.lib.h2_cipher import encrypt as h2_decrypt
     if len(data) < H2_END:
         return None
     model_crc = struct.unpack_from("<I", data, APPINF0_MODELCRC_OFF)[0]
@@ -188,7 +188,7 @@ def extract_xfloat_records(data: bytes) -> list[dict]:
     XFloats (x0..x5) before j0 cleanly. Per-type dispatch for the rest
     is a follow-up.
     """
-    from scripts.h2_cipher import encrypt as h2_decrypt
+    from scripts.lib.h2_cipher import encrypt as h2_decrypt
     if len(data) < H2_END:
         return []
     model_crc = struct.unpack_from("<I", data, APPINF0_MODELCRC_OFF)[0]
@@ -256,7 +256,7 @@ def extract_slider_records(data: bytes) -> list[dict]:
 
     Returns one dict per match in file order.
     """
-    from scripts.h2_cipher import encrypt as h2_decrypt
+    from scripts.lib.h2_cipher import encrypt as h2_decrypt
     if len(data) < H2_END:
         return []
     model_crc = struct.unpack_from("<I", data, APPINF0_MODELCRC_OFF)[0]
@@ -386,7 +386,7 @@ def extract_pictures(data: bytes) -> dict[int, "Image.Image"]:
     Pictures are stored as raw RGB565 little-endian, no compression.
     Returns a dict {pictureid → PIL.Image RGB} keyed by picture id.
     """
-    from scripts.h2_cipher import encrypt as h2_decrypt
+    from scripts.lib.h2_cipher import encrypt as h2_decrypt
     from PIL import Image
     if len(data) < H2_END:
         return {}
@@ -453,7 +453,7 @@ def extract_zi_fonts(data: bytes) -> dict[int, "ZiFont"]:
     Returns a dict keyed by font id (0, 1, ...) with parsed `ZiFont`
     instances, or an empty dict on failure.
     """
-    from scripts.h2_cipher import encrypt as h2_decrypt
+    from scripts.lib.h2_cipher import encrypt as h2_decrypt
     from sim.font import parse_zi
     if len(data) < H2_END:
         return {}
@@ -568,7 +568,7 @@ def extract_text_slots(data: bytes) -> list[tuple[int, str]]:
     text-component values plus one false positive (color bytes that
     happen to spell `'F)'`).
     """
-    from scripts.h2_cipher import encrypt as h2_decrypt
+    from scripts.lib.h2_cipher import encrypt as h2_decrypt
     if len(data) < H2_END:
         return []
     model_crc = struct.unpack_from("<I", data, APPINF0_MODELCRC_OFF)[0]

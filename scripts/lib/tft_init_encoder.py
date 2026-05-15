@@ -29,10 +29,18 @@ once the value table is mapped.
 """
 from __future__ import annotations
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Iterable
 import struct
+import sys
 
-from script_compiler_extras import (
+# Allow running this file directly as `python3 scripts/lib/tft_init_encoder.py`
+# in addition to being imported as `scripts.lib.tft_init_encoder`.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from scripts.lib.script_compiler_extras import (  # noqa: E402
     emit_cjmp, emit_jmp, convert_entry_to_byte_distances,
     flatten_cglist, COMPARATOR_ENDID,
 )
@@ -474,7 +482,7 @@ def _load_op(addr: int) -> bytes:
     The encoded value is the **attribute record index** (u16) into
     the per-page 24-byte-stride attribute-record table at
     ``strdata + pagexinxi.attdataaddr``. See
-    ``nextion/scripts/tft_attrs.py`` and
+    ``nextion/scripts/lib/tft_attrs.py`` and
     ``nextion/findings/attribute-records.md`` for the table layout.
     """
     if not (0 <= addr <= 0xFFFFFFFF):

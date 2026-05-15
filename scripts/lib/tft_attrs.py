@@ -182,7 +182,7 @@ def parse_appinf1_corrected(plain_h2: bytes) -> dict:
     """Decode the F-series appinf1 (76-byte plaintext H2) using the
     real field offsets recovered from hmitype.dll.
 
-    The legacy decoder in ``scripts/tft_format.py`` returns garbled
+    The legacy decoder in ``scripts/lib/tft_format.py`` returns garbled
     offsets for several fields (it uses the TFTTool T0/K0 schema). This
     helper returns the correct F-series view.
     """

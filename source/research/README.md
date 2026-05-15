@@ -24,10 +24,10 @@ xor1_distinctive_text.tft
 
 ## Helpers
 
-- `scripts/diff_hmi.py a.HMI b.HMI` — structured diff of two HMIs
-- `scripts/diff_tft.py a.tft b.tft` — structured diff of two TFTs (with
+- `scripts/tools/diff_hmi.py a.HMI b.HMI` — structured diff of two HMIs
+- `scripts/tools/diff_tft.py a.tft b.tft` — structured diff of two TFTs (with
   H2-region focus for F-series XOR-key recovery)
-- `scripts/diff_bytes.py a b` — generic per-byte / per-region diff
+- `scripts/tools/diff_bytes.py a b` — generic per-byte / per-region diff
 
 Run from the repo root. All three scripts also accept `--out work/<name>.json`
 to dump structured output for later analysis.

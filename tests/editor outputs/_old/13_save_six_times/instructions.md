@@ -44,7 +44,7 @@ End state: 6 pairs of files in this folder.
 ```bash
 for i in 1 2 3 4 5 6; do
   echo "=== iter$i ==="
-  scripts/diff_hmi.py "tests/editor outputs/00_baseline/baseline.HMI" \
+  scripts/tools/diff_hmi.py "tests/editor outputs/00_baseline/baseline.HMI" \
                       "tests/editor outputs/13_save_six_times/iter$i.HMI" \
     | tail -5
 done

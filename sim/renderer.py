@@ -1,6 +1,6 @@
 """Renderer for Nextion DisplayState — produces a Pillow image.
 
-Extracted from scripts/preview_page.py so the simulator and the static
+Extracted from scripts/tools/preview_page.py so the simulator and the static
 previewer can share a single rendering implementation.
 """
 from __future__ import annotations

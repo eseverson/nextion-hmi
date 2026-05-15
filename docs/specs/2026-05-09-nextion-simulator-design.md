@@ -182,7 +182,7 @@ incomplete (non-blocking). The Tk loop polls.
 
 ### `sim/renderer.py` — DisplayState → pixels
 
-Refactored from `scripts/preview_page.py`. Same `render_component` logic;
+Refactored from `scripts/tools/preview_page.py`. Same `render_component` logic;
 now takes a `DisplayState` and renders its `active_page` into a Pillow
 image. Caller (Tk app) decides what to do with the image.
 
@@ -205,10 +205,10 @@ Single window. Composition root:
    sends `0x65 page comp 0x01 \xff\xff\xff` over transport. Button-1
    release does the same with `0x00`.
 
-### `scripts/nextion_sim.py` — entry point
+### `scripts/sim/nextion_sim.py` — entry point
 
 ```
-python3 scripts/nextion_sim.py \
+python3 scripts/sim/nextion_sim.py \
     [--hmi source/nextion.hmi.HMI] \
     [--bind tcp:127.0.0.1:9999 | pty | stdin] \
     [--scale 1] \
@@ -272,7 +272,7 @@ Run: `pytest tests/sim/`. Tests are headless — they construct
 
 ## Validation criteria for P0 done
 
-- [ ] `python3 scripts/nextion_sim.py` opens a window showing the `main`
+- [ ] `python3 scripts/sim/nextion_sim.py` opens a window showing the `main`
       page.
 - [ ] Connecting to TCP and sending `x0.val=12345\xff\xff\xff` updates
       the visible "12345" within ~33 ms.

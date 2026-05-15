@@ -450,7 +450,7 @@ def _self_test() -> None:
     import pathlib
     import sys
 
-    scripts_dir = pathlib.Path(__file__).parent
+    scripts_dir = pathlib.Path(__file__).resolve().parents[1]
     fixture = (
         scripts_dir.parent
         / "tests"

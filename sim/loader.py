@@ -136,7 +136,7 @@ def load_hmi(path: str | Path) -> DisplayState:
         tft_path = Path(path).with_suffix(".tft")
     if tft_path.exists():
         try:
-            from scripts.tft_format import extract_pictures
+            from scripts.lib.tft_format import extract_pictures
             tft_bytes = tft_path.read_bytes()
             state.pictures = extract_pictures(tft_bytes)
         except Exception:
@@ -166,7 +166,7 @@ def load_hmi(path: str | Path) -> DisplayState:
     # live pages and warn (don't fail) on mismatch — the user might have
     # hand-edited a file in a way that didn't update the CRC.
     try:
-        from scripts.page_crc import page_crc as _page_crc
+        from scripts.lib.page_crc import page_crc as _page_crc
     except ImportError:
         _page_crc = None
     if _page_crc is not None:

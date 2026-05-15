@@ -45,7 +45,7 @@ pattern differs, the key is more complex.
 After saving, run:
 
 ```bash
-scripts/diff_tft.py "tests/editor outputs/00_baseline/baseline.tft" \
+scripts/tools/diff_tft.py "tests/editor outputs/00_baseline/baseline.tft" \
                     "tests/editor outputs/01_orientation_flip/after.tft" \
                     --xor-h2
 ```

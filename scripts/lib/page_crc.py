@@ -99,7 +99,7 @@ def patch_crc(blob: bytes) -> bytes:
 
 def _self_test() -> int:
     """Sanity check against the baseline editor capture."""
-    repo_root = Path(__file__).resolve().parent.parent
+    repo_root = Path(__file__).resolve().parents[2]
     base_hmi = repo_root / "tests" / "editor outputs" / "00_baseline" / "base.HMI"
     if not base_hmi.exists():
         print(f"[skip] baseline HMI not found at {base_hmi}")

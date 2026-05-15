@@ -20,7 +20,7 @@ the F-series device runtime.
 
 - [`h2-cipher.md`](h2-cipher.md) — F-series H2 cipher (stateful 3-stage
   subtract/XOR mix, 16-byte key block). Reference impl:
-  [`scripts/h2_cipher.py`](../scripts/h2_cipher.py).
+  [`scripts/lib/h2_cipher.py`](../scripts/lib/h2_cipher.py).
 - [`achmi-internals.md`](achmi-internals.md) — How the editor's
   `achmi.dll` is unpacked, plus the 200-entry dispatch table that
   contains the file-format primitives.
@@ -34,20 +34,20 @@ Reverse-engineering deliverables for the encoder gaps from
   attribute-record table (`binattinf`). Documents the writer routine in
   `hmitype.dll`, the per-type attribute lists, and the bit-packed
   type/length/flags field. Decoder:
-  [`scripts/tft_attrs.py`](../scripts/tft_attrs.py).
+  [`scripts/lib/tft_attrs.py`](../scripts/lib/tft_attrs.py).
 - [`init-bytecode-encoder.md`](init-bytecode-encoder.md) — per-component
   init bytecode emitter, derived from the editor's per-type Nextion
   script templates. Encoder:
-  [`scripts/tft_init_encoder.py`](../scripts/tft_init_encoder.py),
+  [`scripts/lib/tft_init_encoder.py`](../scripts/lib/tft_init_encoder.py),
   round-trips against XFloat / QRCode / Picture / Page fixtures.
 - [`script-compiler.md`](script-compiler.md) — event-handler script
   compiler, located in `hmitype.appbianyi`. Minimal compiler:
-  [`scripts/script_compiler.py`](../scripts/script_compiler.py),
+  [`scripts/lib/script_compiler.py`](../scripts/lib/script_compiler.py),
   round-trips 8 source→bytecode pairs from the project corpus.
 - [`script-control-flow.md`](script-control-flow.md) — `if`/`else`/
   `while`/`for` lowering rules + multi-operand expression emission.
   Helper module:
-  [`scripts/script_compiler_extras.py`](../scripts/script_compiler_extras.py),
+  [`scripts/lib/script_compiler_extras.py`](../scripts/lib/script_compiler_extras.py),
   verified against the `16_loop` fixture (simple expressions, 4-level
   if-elseif chain, `||` chain, while loop with back-jump).
 - [`memory-allocation.md`](memory-allocation.md) — `appbianyi.StructHtoL`
@@ -63,7 +63,7 @@ Reverse-engineering deliverables for the encoder gaps from
   only `Modelcrc` varies between F-series displays.
 - [`h2-trailing.md`](h2-trailing.md) — The 120 bytes after `appinf1`
   in H2 are literal `0xff` padding, not a fingerprint. Verifier:
-  [`scripts/h2_trailing.py`](../scripts/h2_trailing.py) — 27/27
+  [`scripts/lib/h2_trailing.py`](../scripts/lib/h2_trailing.py) — 27/27
   fixtures match.
 
 ## Roadmap

@@ -63,7 +63,7 @@ from typing import Iterable
 # `NextionInstructionSets` ships in tools/TFTTool. Make sure that path is on
 # sys.path before importing — works regardless of where this script is run
 # from.
-_TFTTOOL_DIR = Path(__file__).resolve().parent.parent / "tools" / "TFTTool"
+_TFTTOOL_DIR = Path(__file__).resolve().parents[2] / "tools" / "TFTTool"
 if str(_TFTTOOL_DIR) not in sys.path:
     sys.path.insert(0, str(_TFTTOOL_DIR))
 

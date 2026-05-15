@@ -8,7 +8,7 @@ length-prefixed bytecode block in the TFT usercode region.
 encoding; this file documents the **compiler** that produces it.
 
 A minimal but byte-for-byte verified Python re-implementation lives
-in [`scripts/script_compiler.py`](../scripts/script_compiler.py).
+in [`scripts/lib/script_compiler.py`](../scripts/lib/script_compiler.py).
 
 ## Where the editor's compiler lives
 
@@ -251,7 +251,7 @@ which round-trips every observed case in the miata-dash corpus.
 
 ## What the minimal compiler implements
 
-In [`scripts/script_compiler.py`](../scripts/script_compiler.py),
+In [`scripts/lib/script_compiler.py`](../scripts/lib/script_compiler.py),
 the following round-trip byte-for-byte against the project's actual
 TFT blocks:
 
@@ -378,6 +378,6 @@ Eight of eight known source/bytecode pairs round-trip exactly.
   would dump every event-handler bytecode from a known-good TFT,
   pair it with its source from `Nextion2Text`, and confirm
   round-tripping. The matching script in
-  [`scripts/script_compiler.py`](../scripts/script_compiler.py)'s
+  [`scripts/lib/script_compiler.py`](../scripts/lib/script_compiler.py)'s
   self-test does this for `Program.s`; expanding the corpus is
   cheap.

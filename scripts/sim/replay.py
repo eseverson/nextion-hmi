@@ -6,9 +6,9 @@ Reads a JSONL recording produced by `RecordingTransport` and re-sends the
 the sim emitted) are skipped — the new sim will produce its own.
 
 Usage:
-    scripts/replay.py log.jsonl                          # tcp 127.0.0.1:9999
-    scripts/replay.py log.jsonl --port 12345
-    scripts/replay.py log.jsonl --speed 4                # 4x faster
+    scripts/sim/replay.py log.jsonl                          # tcp 127.0.0.1:9999
+    scripts/sim/replay.py log.jsonl --port 12345
+    scripts/sim/replay.py log.jsonl --speed 4                # 4x faster
 """
 from __future__ import annotations
 import argparse

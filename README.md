@@ -61,12 +61,12 @@ wire when the user clicks a widget.
 
 ```bash
 # Default Tk window, listens on tcp://127.0.0.1:9999
-python3 scripts/nextion_sim.py
+python3 scripts/sim/nextion_sim.py
 
 # In another terminal — bundled helper, frames each command for you:
-scripts/send.py 'x0.val=12345' 's0.txt="MAP Error"' 'page settings'
-scripts/send.py --touch m0                          # click the hotspot
-scripts/send.py --state --http-port 8080            # JSON dump of sim state
+scripts/sim/send.py 'x0.val=12345' 's0.txt="MAP Error"' 'page settings'
+scripts/sim/send.py --touch m0                          # click the hotspot
+scripts/sim/send.py --state --http-port 8080            # JSON dump of sim state
 ```
 
 ### Transports (`--bind`)
@@ -90,7 +90,7 @@ scripts/send.py --state --http-port 8080            # JSON dump of sim state
   - `GET /state.json` — JSON dump (active page, sys vars, components, etc.)
   - `POST /command` — body is a Nextion command (no terminator)
   - `POST /touch` — body is `<target>[ press|release|click]`
-- `--record session.jsonl` — capture all framed I/O to JSONL; replay later with `scripts/replay.py`
+- `--record session.jsonl` — capture all framed I/O to JSONL; replay later with `scripts/sim/replay.py`
 - `--log-commands` — log every received frame at INFO
 
 ### Supported runtime command surface

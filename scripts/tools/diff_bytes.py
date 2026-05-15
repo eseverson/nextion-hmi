@@ -6,8 +6,8 @@ for reverse-engineering — pinpoints exactly which bytes a single editor
 change moved.
 
 Usage:
-    scripts/diff_bytes.py a.bin b.bin
-    scripts/diff_bytes.py a.bin b.bin --window 16 --max-runs 50
+    scripts/tools/diff_bytes.py a.bin b.bin
+    scripts/tools/diff_bytes.py a.bin b.bin --window 16 --max-runs 50
 """
 from __future__ import annotations
 import argparse

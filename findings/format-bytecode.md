@@ -11,7 +11,7 @@ inside the TFT body. Two block families are observed:
    `codesslide` handlers, plus the global `Program.s`. Free-form
    Nextion bytecode.
 
-Reference disassembler: [`scripts/tft_bytecode.py`](../scripts/tft_bytecode.py)
+Reference disassembler: [`scripts/lib/tft_bytecode.py`](../scripts/lib/tft_bytecode.py)
 handles the per-component init format. Per-event bytecode is decoded
 through the existing instruction-set tables in
 [`tools/TFTTool/NextionInstructionSets.py`](../tools/TFTTool/NextionInstructionSets.py).

@@ -524,7 +524,7 @@ def _self_test() -> None:
     OFFSETS["yel.val"] = 0x3a7
     OFFSETS["org.val"] = 0x3b2
     OFFSETS["grn.val"] = 0x3bd
-    with open(Path(__file__).resolve().parent.parent /
+    with open(Path(__file__).resolve().parents[2] /
               "tests" / "editor outputs" / "16_loop" / "16.tft", "rb") as f:
         tft = f.read()
     expected_flat = tft[0x70fec:0x710cb]

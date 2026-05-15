@@ -279,14 +279,14 @@ Update it whenever an experiment lands or a new question opens.
 - **Page CRC algorithm cracked** ([finding Q](findings/Q-page-crc-cracked.md)) —
   five-segment chained byte-wise CRC-32/MPEG-2 living in the editor's
   bundled native `achmi.dll` (subcommand 0x27). Implementation in
-  `scripts/page_crc.py`; verified across all 4 live pages. The page
+  `scripts/lib/page_crc.py`; verified across all 4 live pages. The page
   CRC was the **last barrier to writing valid HMI files**. The same
   achmi.dll has 199 other subcommands — the F-series H2 cipher (T1)
   likely lives in another one.
 
 ### What the page CRC unblocks
 
-- **`scripts/patch_hmi.py`** — modify any byte range inside a `*.pa`
+- **`scripts/tools/patch_hmi.py`** — modify any byte range inside a `*.pa`
   payload, recompute the CRC, write a structurally-valid HMI. Verified
   end-to-end: patch a Variable val, load patched file in the sim, see
   the new value rendered. First Linux-side HMI write tool.

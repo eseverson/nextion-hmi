@@ -8,10 +8,10 @@ docs and cross-referenced research docs.
 **Where it stands**: Three independent pieces exist and pass their own
 self-tests:
 
-- [`scripts/script_compiler.py`](../scripts/script_compiler.py) — base
+- [`scripts/lib/script_compiler.py`](../scripts/lib/script_compiler.py) — base
   compiler (assignments, `print`/`printh`, `page N`, system-variable
   writes, global `int` declarations).
-- [`scripts/script_compiler_extras.py`](../scripts/script_compiler_extras.py)
+- [`scripts/lib/script_compiler_extras.py`](../scripts/lib/script_compiler_extras.py)
   — control-flow lowering (`if`/`else`/`while`/`for`) and multi-operand
   expression emission. Verified against `16_loop`. See
   [`script-control-flow.md`](script-control-flow.md).
@@ -32,7 +32,7 @@ self-tests:
 
 ## 2. Finish the per-component init-bytecode encoder
 
-**Where it stands**: [`scripts/tft_init_encoder.py`](../scripts/tft_init_encoder.py)
+**Where it stands**: [`scripts/lib/tft_init_encoder.py`](../scripts/lib/tft_init_encoder.py)
 round-trips XFloat / QRCode / Picture / Page. The Text `setbrush`
 sub-variant dispatch is now fully understood
 ([`text-setbrush-variant.md`](text-setbrush-variant.md)): per-type
@@ -54,7 +54,7 @@ LOAD operand.
 
 ## 3. Build the attribute-record encoder
 
-**Where it stands**: [`scripts/tft_attrs.py`](../scripts/tft_attrs.py)
+**Where it stands**: [`scripts/lib/tft_attrs.py`](../scripts/lib/tft_attrs.py)
 **decodes** the per-page 24-byte `binattinf` table; the writer chain
 in `hmitype.dll` is fully mapped in
 [`attribute-records.md`](attribute-records.md).

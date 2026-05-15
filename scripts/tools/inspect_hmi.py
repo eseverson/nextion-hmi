@@ -7,8 +7,8 @@ Pair with `diff` (or `jq`) to compare two saves at a higher level than
 raw bytes.
 
 Usage:
-    scripts/inspect_hmi.py source/nextion.hmi.HMI
-    scripts/inspect_hmi.py path.HMI --json > dump.json
+    scripts/tools/inspect_hmi.py source/nextion.hmi.HMI
+    scripts/tools/inspect_hmi.py path.HMI --json > dump.json
 """
 from __future__ import annotations
 import argparse
@@ -16,7 +16,7 @@ import json
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from sim.loader import load_hmi  # noqa: E402

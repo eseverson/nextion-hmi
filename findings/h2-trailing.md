@@ -6,7 +6,7 @@ plaintext) are **constant `0xff` padding** in every F-series TFT the
 editor produces. They are not a fingerprint table, not a per-page
 record array, and they carry no project-specific data.
 
-Verification helper: [`scripts/h2_trailing.py`](../scripts/h2_trailing.py).
+Verification helper: [`scripts/lib/h2_trailing.py`](../scripts/lib/h2_trailing.py).
 Round-trips all 27 fixtures in `tests/editor outputs/` plus
 `source/nextion.hmi.tft` byte-for-byte. No exceptions.
 
@@ -131,7 +131,7 @@ a1 4a c8 79 42 1f 7c 53   a3 5e 97 8e b2 5f 86 09
 ciphertext on its own, because the cipher's state at the start of the
 trailing region depends on the preceding 76 bytes of appinf1. The
 fixture-by-fixture round-trip in
-[`scripts/h2_trailing.py`](../scripts/h2_trailing.py) confirms that
+[`scripts/lib/h2_trailing.py`](../scripts/lib/h2_trailing.py) confirms that
 encrypting `appinf1 || 0xff*120` against ModelCRC always reproduces
 the stored ciphertext.
 
@@ -147,7 +147,7 @@ file[0xc8:0x18c] = h2_ciphertext
 file[0x18c:0x190] = crc32_mpeg2(h2_ciphertext).to_bytes(4, "little")
 ```
 
-(Note: the function literally named `encrypt` in `scripts/h2_cipher.py`
+(Note: the function literally named `encrypt` in `scripts/lib/h2_cipher.py`
 is the asm-verbatim *DecData* routine — see the alias comment at
 [`sim/tft_loader.py:54`](../sim/tft_loader.py). The function literally
 named `decrypt` is the symmetric inverse used to *encrypt* plaintext
@@ -160,7 +160,7 @@ All 27 TFT fixtures in the corpus round-trip cleanly under this
 hypothesis:
 
 ```
-$ python3 scripts/h2_trailing.py
+$ python3 scripts/lib/h2_trailing.py
 checking 27 fixtures...
   base.tft               trail=0xff: True  recipher_match: True
   01.tft                 trail=0xff: True  recipher_match: True

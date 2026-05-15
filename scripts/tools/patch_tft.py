@@ -24,13 +24,13 @@ Always recomputes all three CRCs after editing.
 Examples:
 
     # Flip the orientation byte in H1 (offset 0x14 = guidire) to 0:
-    scripts/patch_tft.py source.tft --h1-offset 0x14 --u8 0 -o flat.tft
+    scripts/tools/patch_tft.py source.tft --h1-offset 0x14 --u8 0 -o flat.tft
 
     # Bump pageqyt by 1 in the encrypted H2 (struct offset 0x38):
-    scripts/patch_tft.py source.tft --h2-offset 0x38 --u16 5 -o more_pages.tft
+    scripts/tools/patch_tft.py source.tft --h2-offset 0x38 --u16 5 -o more_pages.tft
 
     # Verify CRCs round-trip on a sample TFT (no edit):
-    scripts/patch_tft.py source.tft --verify
+    scripts/tools/patch_tft.py source.tft --verify
 """
 from __future__ import annotations
 import argparse
@@ -38,12 +38,12 @@ import struct
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.h2_cipher import encrypt as h2_decrypt, decrypt as h2_encrypt  # noqa: E402
-from scripts.page_crc import crc32_bytewise                                  # noqa: E402
-from scripts import tft_format                                                # noqa: E402
+from scripts.lib.h2_cipher import encrypt as h2_decrypt, decrypt as h2_encrypt  # noqa: E402
+from scripts.lib.page_crc import crc32_bytewise                                  # noqa: E402
+from scripts.lib import tft_format                                                # noqa: E402
 
 
 def _u32_le(value: int) -> bytes:

@@ -3,7 +3,7 @@
 and rewrite the page CRC so the file remains structurally valid.
 
 Now that finding Q has cracked the page CRC algorithm
-(`scripts/page_crc.py`), this is the first concrete write capability for
+(`scripts/lib/page_crc.py`), this is the first concrete write capability for
 HMI files: edit a single Variable val (or any byte range inside a page
 payload), recompute the page's leading CRC, write the file back.
 
@@ -14,11 +14,11 @@ Examples:
 
     # Set page main's `red` Variable val to 0xCAFEBABE (offset 21067 in 0.pa
     # per finding G2) and write to a new file:
-    scripts/patch_hmi.py source.HMI --page 0 --offset 21067 \\
+    scripts/tools/patch_hmi.py source.HMI --page 0 --offset 21067 \\
                          --u32 0xCAFEBABE -o patched.HMI
 
     # Replace 8 bytes verbatim:
-    scripts/patch_hmi.py source.HMI --page 0 --offset 21067 \\
+    scripts/tools/patch_hmi.py source.HMI --page 0 --offset 21067 \\
                          --bytes "ce fa ed fe ad de ad c0" -o patched.HMI
 
 The directory metadata + page CRC are recomputed automatically. Other
@@ -30,10 +30,10 @@ import struct
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.page_crc import page_crc, crc32_bytewise  # noqa: E402
+from scripts.lib.page_crc import page_crc, crc32_bytewise  # noqa: E402
 
 
 def find_live_page(raw: bytes, page_id: int) -> tuple[int, int, int, str]:
@@ -114,7 +114,7 @@ def main() -> int:
 
     if args.verify:
         # Re-verify all live page CRCs in the output
-        from scripts.page_crc import verify
+        from scripts.lib.page_crc import verify
         result = bytes(out)
         count = struct.unpack_from("<I", result, 0)[0]
         for i in range(count):

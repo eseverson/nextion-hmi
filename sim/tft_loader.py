@@ -51,7 +51,7 @@ def _decrypt_h2(data: bytes) -> bytes:
     repo_root = Path(__file__).resolve().parents[1]
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
-    from scripts.h2_cipher import encrypt as h2_decrypt   # asm-verbatim = decrypt
+    from scripts.lib.h2_cipher import encrypt as h2_decrypt   # asm-verbatim = decrypt
     model_crc = struct.unpack_from("<I", data, _MODELCRC_OFF)[0]
     return h2_decrypt(data[_H2_START:_H2_END], model_crc)
 
@@ -105,7 +105,7 @@ def _extract_text_slots(data: bytes) -> list[tuple[int, str]]:
     repo_root = Path(__file__).resolve().parents[1]
     if str(repo_root) not in _sys.path:
         _sys.path.insert(0, str(repo_root))
-    from scripts.tft_format import extract_text_slots
+    from scripts.lib.tft_format import extract_text_slots
     return extract_text_slots(data)
 
 
@@ -114,7 +114,7 @@ def _extract_page_bco(data: bytes) -> int | None:
     repo_root = Path(__file__).resolve().parents[1]
     if str(repo_root) not in _sys.path:
         _sys.path.insert(0, str(repo_root))
-    from scripts.tft_format import extract_page_bco
+    from scripts.lib.tft_format import extract_page_bco
     return extract_page_bco(data)
 
 
@@ -123,7 +123,7 @@ def _extract_variable_vals(data: bytes, n_variables: int) -> list[int]:
     repo_root = Path(__file__).resolve().parents[1]
     if str(repo_root) not in _sys.path:
         _sys.path.insert(0, str(repo_root))
-    from scripts.tft_format import extract_variable_vals
+    from scripts.lib.tft_format import extract_variable_vals
     return extract_variable_vals(data, n_variables)
 
 
@@ -132,7 +132,7 @@ def _extract_xfloat_records(data: bytes) -> list[dict]:
     repo_root = Path(__file__).resolve().parents[1]
     if str(repo_root) not in _sys.path:
         _sys.path.insert(0, str(repo_root))
-    from scripts.tft_format import extract_xfloat_records
+    from scripts.lib.tft_format import extract_xfloat_records
     return extract_xfloat_records(data)
 
 
@@ -141,7 +141,7 @@ def _extract_progressbar_records(data: bytes) -> list[dict]:
     repo_root = Path(__file__).resolve().parents[1]
     if str(repo_root) not in _sys.path:
         _sys.path.insert(0, str(repo_root))
-    from scripts.tft_format import extract_progressbar_records
+    from scripts.lib.tft_format import extract_progressbar_records
     return extract_progressbar_records(data)
 
 
@@ -150,7 +150,7 @@ def _extract_text_colors(data: bytes, slot_offset: int, comp_type: int) -> dict:
     repo_root = Path(__file__).resolve().parents[1]
     if str(repo_root) not in _sys.path:
         _sys.path.insert(0, str(repo_root))
-    from scripts.tft_format import extract_text_colors
+    from scripts.lib.tft_format import extract_text_colors
     return extract_text_colors(data, slot_offset, comp_type)
 
 
@@ -159,7 +159,7 @@ def _extract_slider_records(data: bytes) -> list[dict]:
     repo_root = Path(__file__).resolve().parents[1]
     if str(repo_root) not in _sys.path:
         _sys.path.insert(0, str(repo_root))
-    from scripts.tft_format import extract_slider_records
+    from scripts.lib.tft_format import extract_slider_records
     return extract_slider_records(data)
 
 
@@ -168,7 +168,7 @@ def _extract_zi_fonts(data: bytes) -> dict:
     repo_root = Path(__file__).resolve().parents[1]
     if str(repo_root) not in _sys.path:
         _sys.path.insert(0, str(repo_root))
-    from scripts.tft_format import extract_zi_fonts
+    from scripts.lib.tft_format import extract_zi_fonts
     return extract_zi_fonts(data)
 
 
@@ -177,7 +177,7 @@ def _extract_pictures(data: bytes) -> dict:
     repo_root = Path(__file__).resolve().parents[1]
     if str(repo_root) not in _sys.path:
         _sys.path.insert(0, str(repo_root))
-    from scripts.tft_format import extract_pictures
+    from scripts.lib.tft_format import extract_pictures
     return extract_pictures(data)
 
 
@@ -495,6 +495,6 @@ def _parse_objdata_ram(data: bytes, info: dict, page_dir: list[dict]) -> dict[in
 
 def _orientation_from_guidire(guidire: int) -> int:
     """Translate the H1 `guidire` byte (file offset 0x14) to a rotation
-    in degrees. Same mapping `scripts/nextion_sim.py` uses when sniffing
+    in degrees. Same mapping `scripts/sim/nextion_sim.py` uses when sniffing
     a sibling TFT for the HMI loader."""
     return {0x00: 90, 0x01: 0, 0x02: 270, 0x03: 180}.get(guidire & 0xFF, 0)

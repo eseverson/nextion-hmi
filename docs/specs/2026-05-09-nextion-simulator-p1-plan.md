@@ -134,6 +134,6 @@ On `load_hmi`, parse `Program.s` and run it once with a boot context (handles
 ## Validation
 
 - `pytest tests/sim/` ≥ 60 tests passing.
-- `python3 scripts/nextion_sim.py` boot + send `x1.val=7000` → x1 background
+- `python3 scripts/sim/nextion_sim.py` boot + send `x1.val=7000` → x1 background
   goes red within ≤ 500 ms.
 - Replay test snapshot updates to show the Timer reactivity result.

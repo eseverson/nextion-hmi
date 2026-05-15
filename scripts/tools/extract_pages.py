@@ -40,7 +40,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_TFT = REPO_ROOT / "source" / "nextion.hmi.tft"
 DEFAULT_OUT = REPO_ROOT / "work"
 

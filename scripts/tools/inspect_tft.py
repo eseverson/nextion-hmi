@@ -3,8 +3,8 @@
 partial H2 decryption using the half-key recovered in finding L.
 
 Usage:
-    scripts/inspect_tft.py source/nextion.hmi.tft
-    scripts/inspect_tft.py path.tft --json > dump.json
+    scripts/tools/inspect_tft.py source/nextion.hmi.tft
+    scripts/tools/inspect_tft.py path.tft --json > dump.json
 """
 from __future__ import annotations
 import argparse

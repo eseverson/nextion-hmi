@@ -177,7 +177,7 @@ def page_crc(page_bytes):
 The four trailing micro-runs re-mix bytes already covered by the body
 sweep — a deliberate redundant chain that defeats brute-forcing
 textbook CRC-32 variants. Reference implementation:
-[`scripts/page_crc.py`](../scripts/page_crc.py).
+[`scripts/lib/page_crc.py`](../scripts/lib/page_crc.py).
 
 Open question: whether `Program.s`, `*.zi`, and `main.HMI` use the same
 algorithm with different segment chains (their entries also have a

@@ -14,7 +14,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 EXP_DIR = REPO_ROOT / "tests" / "editor outputs"
 BASELINE_DIR = EXP_DIR / "00_baseline"
 

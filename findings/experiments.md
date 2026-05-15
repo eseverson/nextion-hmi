@@ -17,8 +17,8 @@ exact reproduction steps.
   byte-count deltas as deltas from the immediately previous experiment,
   not from baseline.
 - **Baseline**: `00_baseline/base.HMI` is the user's modified-from-
-  original starting state. Diffs run with `scripts/diff_hmi.py` and
-  `scripts/diff_tft.py`.
+  original starting state. Diffs run with `scripts/tools/diff_hmi.py` and
+  `scripts/tools/diff_tft.py`.
 - **Pure no-change saves** produce **byte-identical TFTs**. The
   compile pipeline is deterministic when content hasn't changed.
 
@@ -195,7 +195,7 @@ chain). The leading u32 of each blob has the shape of a CRC.
   find which produces the new leading u32.
 
 **Answers**: H5. Likely small modification of
-[`scripts/page_crc.py`](../scripts/page_crc.py).
+[`scripts/lib/page_crc.py`](../scripts/lib/page_crc.py).
 
 ### Stable region decode (advances H2 trailing region)
 

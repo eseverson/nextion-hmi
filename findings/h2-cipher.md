@@ -2,7 +2,7 @@
 
 Status: **fully cracked** as of 2026-05-10. F-series H2 is decryptable
 and re-encryptable. Reference implementation:
-[`scripts/h2_cipher.py`](../scripts/h2_cipher.py), round-trips every
+[`scripts/lib/h2_cipher.py`](../scripts/lib/h2_cipher.py), round-trips every
 F-series TFT in `tests/editor outputs/`.
 
 For T0/K0/X3/X5 series, TFTTool's existing 4-byte repeating XOR scheme
@@ -91,7 +91,7 @@ prev_K0  = K[0..3]
 state    = mul
 ```
 
-Both directions live in [`scripts/h2_cipher.py`](../scripts/h2_cipher.py)
+Both directions live in [`scripts/lib/h2_cipher.py`](../scripts/lib/h2_cipher.py)
 as `encrypt` and `decrypt`. Verified by:
 
 - round-trip on synthetic input (`encrypt(decrypt(x)) == x`);

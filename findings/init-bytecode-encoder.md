@@ -3,7 +3,7 @@
 This document closes [`next-steps.md`](next-steps.md) gap #2 — the
 encoder that produces the per-component init bytecode block from a
 component (type, x, y, w, h, attrs). The disassembler exists already
-([`scripts/tft_bytecode.py`](../scripts/tft_bytecode.py)); this is the
+([`scripts/lib/tft_bytecode.py`](../scripts/lib/tft_bytecode.py)); this is the
 inverse direction.
 
 ## Where the emitter lives in the editor
@@ -206,7 +206,7 @@ and emitting either:
   where `0xHHLL` is the **u16 record index** of the attribute's value
   in the per-page 24-byte-stride attribute-record table at
   ``strdata + pagexinxi.attdataaddr`` (resolved via
-  [`scripts/tft_attrs.py`](../scripts/tft_attrs.py) — agent 1's
+  [`scripts/lib/tft_attrs.py`](../scripts/lib/tft_attrs.py) — agent 1's
   territory, see [`attribute-records.md`](attribute-records.md)),
 - a 5-byte long-form int literal `03 LL HH HH HH` for compile-time
   numeric constants that don't fit a short ASCII form (e.g. the
@@ -256,7 +256,7 @@ For the next XFloat `x1` at `(160, 20, 160, 50)`:
 The LOAD operand is a **u16 record index** into the per-page
 24-byte-stride attribute-record table at
 ``strdata + pagexinxi.attdataaddr`` — see
-[`scripts/tft_attrs.py`](../scripts/tft_attrs.py) and
+[`scripts/lib/tft_attrs.py`](../scripts/lib/tft_attrs.py) and
 [`findings/attribute-records.md`](attribute-records.md) (agent 1's
 output) for the table layout. The per-component "stride" of ~41
 records reflects how many distinct attribute slots each XFloat
@@ -343,7 +343,7 @@ size-8 opcode list. The encoder uses the observed byte values from
 **Enables**: given a complete attribute-address map (gap #1's
 output), we can emit byte-for-byte-correct init bytecode for every
 component type observed in real projects. The encoder in
-[`scripts/tft_init_encoder.py`](../scripts/tft_init_encoder.py)
+[`scripts/lib/tft_init_encoder.py`](../scripts/lib/tft_init_encoder.py)
 takes that map as a parameter (via the `attr_addr` callable) and
 needs no other inputs.
 

@@ -13,7 +13,7 @@ handlers:
 
 Both pieces live in the same `appbianyi` chain in `plain_hmitype.dll`. One
 read covers both. A Python helper that emits the bytes lives in
-[`scripts/script_compiler_extras.py`](../scripts/script_compiler_extras.py).
+[`scripts/lib/script_compiler_extras.py`](../scripts/lib/script_compiler_extras.py).
 
 ## Source methods (managed `plain_hmitype.dll`)
 

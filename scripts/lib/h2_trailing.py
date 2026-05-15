@@ -17,7 +17,7 @@ If both assertions hold across the corpus, the H2 region is fully
 reproducible from the 76-byte `appinf1` struct alone, no external
 fingerprint data is needed for writing.
 
-Usage: `python3 scripts/h2_trailing.py [TFT_PATH ...]`. With no
+Usage: `python3 scripts/lib/h2_trailing.py [TFT_PATH ...]`. With no
 arguments, walks the test corpus and the source project.
 """
 from __future__ import annotations
@@ -30,13 +30,13 @@ from pathlib import Path
 
 
 # Make `scripts.*` and `nextion.*` imports work from any cwd.
-_REPO = Path(__file__).resolve().parents[1]
+_REPO = Path(__file__).resolve().parents[2]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
-from scripts.h2_cipher import encrypt as h2_decrypt   # asm-verbatim DecData (decrypts)
-from scripts.h2_cipher import decrypt as h2_encrypt   # symmetric inverse (encrypts)
-from scripts.tft_format import (
+from scripts.lib.h2_cipher import encrypt as h2_decrypt   # asm-verbatim DecData (decrypts)
+from scripts.lib.h2_cipher import decrypt as h2_encrypt   # symmetric inverse (encrypts)
+from scripts.lib.tft_format import (
     APPINF0_MODELCRC_OFF,
     APPINF1_SIZE,
     H2_END,

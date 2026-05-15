@@ -40,16 +40,16 @@ EXP="01_orientation_flip"
 BL="tests/editor outputs/00_baseline"
 NEW="tests/editor outputs/$EXP"
 
-scripts/diff_tft.py "$BL/baseline.tft" "$NEW/after.tft" --xor-h2
-scripts/diff_hmi.py "$BL/baseline.HMI" "$NEW/after.HMI"
-diff <(scripts/inspect_hmi.py "$BL/baseline.HMI" --json) \
-     <(scripts/inspect_hmi.py "$NEW/after.HMI" --json)
+scripts/tools/diff_tft.py "$BL/baseline.tft" "$NEW/after.tft" --xor-h2
+scripts/tools/diff_hmi.py "$BL/baseline.HMI" "$NEW/after.HMI"
+diff <(scripts/tools/inspect_hmi.py "$BL/baseline.HMI" --json) \
+     <(scripts/tools/inspect_hmi.py "$NEW/after.HMI" --json)
 ```
 
 Or run all of them at once:
 
 ```bash
-scripts/analyze_editor_outputs.py
+scripts/tools/analyze_editor_outputs.py
 ```
 
 That walks every `tests/editor outputs/*` folder containing an `after.*`

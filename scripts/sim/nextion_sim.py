@@ -10,7 +10,7 @@ import logging
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from sim.app import App  # noqa: E402
@@ -69,7 +69,7 @@ def main() -> int:
     ap.add_argument("--http", type=int, default=None, metavar="PORT",
                     help="Also start an HTTP introspection/control server on PORT.")
     ap.add_argument("--record", default=None, metavar="PATH",
-                    help="Record framed I/O to PATH (JSONL); replay with scripts/replay.py.")
+                    help="Record framed I/O to PATH (JSONL); replay with scripts/sim/replay.py.")
     args = ap.parse_args()
 
     logging.basicConfig(

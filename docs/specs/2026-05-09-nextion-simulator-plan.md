@@ -4,7 +4,7 @@
 
 **Goal:** Build a Linux process that renders the Nextion dashboard and accepts the same `\xff\xff\xff`-framed serial commands the miata-dash firmware sends, plus emits canonical Nextion touch events when the user clicks visible widgets.
 
-**Architecture:** Single Python process. Pure-data `DisplayState` model fed by a parser-then-executor pipeline. Pluggable `Transport` (TCP / PTY / stdin) is the only I/O. Renderer extracted from the existing `scripts/preview_page.py` reads `DisplayState` and paints into a Tk window each tick. P0 is non-scripted (no expression evaluator, no `if`/`while`); P1 will add that.
+**Architecture:** Single Python process. Pure-data `DisplayState` model fed by a parser-then-executor pipeline. Pluggable `Transport` (TCP / PTY / stdin) is the only I/O. Renderer extracted from the existing `scripts/tools/preview_page.py` reads `DisplayState` and paints into a Tk window each tick. P0 is non-scripted (no expression evaluator, no `if`/`while`); P1 will add that.
 
 **Tech Stack:** Python 3.10+, Pillow (already used by `preview_page.py`), `tkinter` (stdlib), `socket` / `os.openpty` (stdlib), `pytest` for tests. No new third-party deps beyond what `setup.sh` already brings in for tooling.
 
@@ -38,7 +38,7 @@ nextion/
         └── firmware_replay.png         # committed reference render
 ```
 
-`scripts/preview_page.py` keeps working — Task 8 introduces `sim/renderer.py`
+`scripts/tools/preview_page.py` keeps working — Task 8 introduces `sim/renderer.py`
 and rewires `preview_page.py` to call it (no behaviour change to the
 existing previewer).
 
@@ -328,7 +328,7 @@ git commit -m "sim: state model (RGB565, Component, Page, DisplayState)"
 - Create: `sim/loader.py`
 - Create: `tests/sim/test_loader.py`
 
-This task extracts the HMI-loading logic from `scripts/preview_page.py` into a reusable function. The previewer keeps working (Task 8 will route it through this).
+This task extracts the HMI-loading logic from `scripts/tools/preview_page.py` into a reusable function. The previewer keeps working (Task 8 will route it through this).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1251,10 +1251,10 @@ git commit -m "sim: transports (tcp/stdin/pty) + EventEmitter"
 
 **Files:**
 - Create: `sim/renderer.py`
-- Modify: `scripts/preview_page.py` (route through new renderer)
+- Modify: `scripts/tools/preview_page.py` (route through new renderer)
 - Create: `tests/sim/test_renderer.py`
 
-This refactors the rendering logic out of `scripts/preview_page.py` so the
+This refactors the rendering logic out of `scripts/tools/preview_page.py` so the
 sim can reuse it. The previewer becomes a thin wrapper.
 
 - [x] **Step 1: Write the failing test**
@@ -1287,7 +1287,7 @@ def test_renderer_respects_dim(hmi_path):
 
 - [x] **Step 3: Implement `sim/renderer.py` by extracting from `preview_page.py`**
 
-Copy the rendering helpers (`rgb565_to_rgb888`, `find_font_file`, `load_font`, `font_size_for`, `align_text`, `format_xfloat`, `render_component`) from `scripts/preview_page.py` into `sim/renderer.py`. Then add the class:
+Copy the rendering helpers (`rgb565_to_rgb888`, `find_font_file`, `load_font`, `font_size_for`, `align_text`, `format_xfloat`, `render_component`) from `scripts/tools/preview_page.py` into `sim/renderer.py`. Then add the class:
 
 ```python
 # At the bottom of sim/renderer.py
@@ -1320,7 +1320,7 @@ class Renderer:
         return img
 ```
 
-- [x] **Step 4: Rewire `scripts/preview_page.py`**
+- [x] **Step 4: Rewire `scripts/tools/preview_page.py`**
 
 Replace its `render_page` function body with:
 
@@ -1371,7 +1371,7 @@ def main() -> int:
 
 ```
 pytest tests/sim/test_renderer.py -v
-python3 scripts/preview_page.py
+python3 scripts/tools/preview_page.py
 ```
 
 Expected: tests pass, previewer prints same output as before, PNGs in `work/` look the same as before.
@@ -1379,7 +1379,7 @@ Expected: tests pass, previewer prints same output as before, PNGs in `work/` lo
 - [x] **Step 6: Commit**
 
 ```bash
-git add sim/renderer.py tests/sim/test_renderer.py scripts/preview_page.py
+git add sim/renderer.py tests/sim/test_renderer.py scripts/tools/preview_page.py
 git commit -m "sim: renderer extracted from preview_page; preview routes through it"
 ```
 
@@ -1529,10 +1529,10 @@ git commit -m "sim: Tk app loop wires transport, parser, executor, renderer"
 
 ---
 
-## Task 9: `scripts/nextion_sim.py` — entry point
+## Task 9: `scripts/sim/nextion_sim.py` — entry point
 
 **Files:**
-- Create: `scripts/nextion_sim.py`
+- Create: `scripts/sim/nextion_sim.py`
 
 - [ ] **Step 1: Write the script**
 
@@ -1604,7 +1604,7 @@ if __name__ == "__main__":
 - [ ] **Step 2: Smoke-run with stdin transport (immediate exit on EOF)**
 
 ```
-echo "" | python3 scripts/nextion_sim.py --bind stdin --log-level WARNING
+echo "" | python3 scripts/sim/nextion_sim.py --bind stdin --log-level WARNING
 ```
 
 Expected: Tk window briefly opens, processes empty input, exits when
@@ -1614,7 +1614,7 @@ need and skip.)
 - [ ] **Step 3: Commit**
 
 ```bash
-git add scripts/nextion_sim.py
+git add scripts/sim/nextion_sim.py
 git commit -m "sim: entry point script"
 ```
 
@@ -1735,7 +1735,7 @@ A live Linux process that renders the dashboard and accepts the same
 serial commands the firmware sends.
 
 ```bash
-python3 scripts/nextion_sim.py
+python3 scripts/sim/nextion_sim.py
 # starts a Tk window, listens on tcp://127.0.0.1:9999
 
 # In another terminal:

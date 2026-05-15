@@ -1,5 +1,5 @@
 """Recording transport — wraps any Transport and logs every framed
-exchange to a JSONL file. Pair with `scripts/replay.py` to feed the
+exchange to a JSONL file. Pair with `scripts/sim/replay.py` to feed the
 captured stream back into a fresh sim, preserving wall-clock spacing.
 
 Format: one JSON object per line:
