@@ -127,8 +127,18 @@ class CompileContext:
     when an `int <name>` declaration is encountered."""
     component_offsets: dict[str, int] = field(default_factory=dict)
     """Map from "comp.attr" → absolute public-memory byte offset.
-    Populated by the caller from the memory allocator or from parsed
-    TFT data. Used to resolve component-attribute refs in scripts."""
+
+    Explicit overrides take precedence over ``allocator`` lookups. Pass
+    this dict directly when you want to hard-code offsets (e.g. for a
+    fixture-driven regression test), or leave it empty and use
+    ``allocator``."""
+    allocator: "MemoryAllocator | None" = None
+    """Optional ``memory_allocator.MemoryAllocator`` instance. When set,
+    ``resolve_atom("<comp>.<attr>")`` falls back to
+    ``allocator.frame_offset(comp, attr)`` if the dotted ref isn't in
+    ``component_offsets``. This is the preferred path for new code —
+    it derives offsets from the project's component layout rather than
+    requiring the caller to enumerate every comp/attr pair."""
 
     def __post_init__(self):
         insn_set = _find_instruction_set(self.editor_version, self.model)
@@ -162,13 +172,8 @@ class CompileContext:
         its operand bytes. Integer literals are handled separately by the
         expression compiler and are NOT routed through here."""
         if "." in name:
-            if name in self.component_offsets:
-                off = self.component_offsets[name]
-                return bytes([LOCAL_PREFIX]) + struct.pack("<I", off)
-            raise ValueError(
-                f"unknown component attribute {name!r}: add it to "
-                f"CompileContext.component_offsets"
-            )
+            off = self._resolve_component_attr(name)
+            return bytes([LOCAL_PREFIX]) + struct.pack("<I", off)
         if self.is_sysvar(name):
             return self.sysvar_operand(name)
         if self.is_global(name):
@@ -176,6 +181,30 @@ class CompileContext:
         raise ValueError(
             f"unknown identifier {name!r}: not a sysvar, declared global, "
             f"or component attribute"
+        )
+
+    def _resolve_component_attr(self, dotted: str) -> int:
+        """Look up the absolute public-memory offset for ``<comp>.<attr>``.
+
+        Search order: explicit ``component_offsets`` dict first
+        (caller-supplied overrides), then ``allocator.frame_offset(...)``.
+        Raises ``ValueError`` if neither resolves it.
+        """
+        if dotted in self.component_offsets:
+            return self.component_offsets[dotted]
+        if self.allocator is not None and "." in dotted:
+            comp, attr = dotted.split(".", 1)
+            if self.allocator.has_component(comp):
+                try:
+                    return self.allocator.frame_offset(comp, attr)
+                except KeyError as exc:
+                    raise ValueError(
+                        f"unknown attribute {attr!r} on {comp!r}: {exc}"
+                    ) from None
+        raise ValueError(
+            f"unknown component attribute {dotted!r}: add it to "
+            f"CompileContext.component_offsets, or register the component "
+            f"with the attached MemoryAllocator"
         )
 
 
@@ -551,3 +580,93 @@ qq=qq+1
     )
 
     print("compile_event_handler self-test OK")
+
+    # -- Allocator-driven resolution -----------------------------------------
+    # Same if-else fixture, but resolve x8.val / x8.bco / bco.val / red.val
+    # via MemoryAllocator instead of an explicit component_offsets dict.
+    # Verifies the new fallback path in resolve_atom.
+    from memory_allocator import MemoryAllocator
+
+    actx = CompileContext()
+    actx.globals = {"sys0": 0x00, "qq": 0x0c}
+    alloc = MemoryAllocator(app_allvas_qty=4)
+    # Place x0..x8 at the same memorypos as the 16_loop fixture:
+    _bco_ap = 1  # ATTPOSUP_TABLE[59]["bco"]
+    for cname, bco_off in [
+        ("x0", 0x38), ("x2", 0x8a), ("x4", 0xdc), ("x5", 0xe5),
+        ("x1", 0x105), ("x6", 0x161), ("x7", 0x178), ("x8", 0x1a1),
+    ]:
+        alloc.cursor = bco_off - _bco_ap
+        alloc.add_object(59, cname)
+    # And the color Variables (type 52, val at offset 0):
+    for cname, mempos in [
+        ("bco", 0x37b), ("blu", 0x386), ("red", 0x391),
+        ("wht", 0x39c), ("yel", 0x3a7), ("org", 0x3b2), ("grn", 0x3bd),
+    ]:
+        alloc.cursor = mempos
+        alloc.add_object(52, cname)
+    actx.allocator = alloc
+
+    got = compile_event_handler(src_if_else, actx)
+    assert got == expected_if_else, (
+        f"if-else (allocator path) mismatch:\n  got      {got.hex()}\n"
+        f"  expected {expected_if_else.hex()}"
+    )
+
+    # Confirm the explicit-dict path still wins when both are set.
+    actx2 = CompileContext()
+    actx2.globals = {"sys0": 0x00, "qq": 0x0c}
+    actx2.allocator = alloc
+    actx2.component_offsets = {"x8.val": 0xdead}  # garbage, but should be used
+    try:
+        compile_event_handler(src_if_else, actx2)
+    except Exception:
+        pass  # any failure is fine; we just want to confirm the dict path was hit
+    # Verify the resolved bytes for x8.val came from the dict, not the allocator.
+    assert actx2._resolve_component_attr("x8.val") == 0xdead
+
+    print("allocator-driven resolution self-test OK")
+
+    # -- Multi-elif smoke test ------------------------------------------------
+    # The miata-dash Timer event has an x1.val cascade (4-way: >6800 / >6500
+    # / >6000 / else). We don't yet have byte-verified expected bytes, but
+    # the structure should compile without errors and produce a sensible
+    # cjmp/jmp pattern: 3 entries for the cjmp clauses, 3 body+jmp pairs,
+    # 1 else body, and the closing target.
+    src_elif_cascade = """\
+if(x1.val>6800)
+x1.bco=red.val
+}else if(x1.val>6500)
+x1.bco=org.val
+}else if(x1.val>6000)
+x1.bco=yel.val
+}else
+x1.bco=bco.val
+}"""
+    out = compile_event_handler(src_elif_cascade, actx)
+    # Each entry in the cglist is length-prefixed; walk them and count.
+    i = 0
+    n_entries = 0
+    while i + 4 <= len(out):
+        ln = struct.unpack_from("<I", out, i)[0]
+        if ln == 0 or i + 4 + ln > len(out):
+            break
+        n_entries += 1
+        i += 4 + ln
+    # 3 cjmp entries + 4 body entries (red/org/yel/bco) + 3 jmp entries
+    # connecting branches to the close = 10 entries total.
+    assert n_entries == 10, f"expected 10 entries, got {n_entries}"
+    # Verify each cjmp entry starts with the 'i' opcode (09 00 04).
+    cjmps = 0
+    i = 0
+    while i + 4 <= len(out):
+        ln = struct.unpack_from("<I", out, i)[0]
+        if ln == 0 or i + 4 + ln > len(out):
+            break
+        body = out[i + 4:i + 4 + ln]
+        if body[:3] == b"\x09\x00\x04":
+            cjmps += 1
+        i += 4 + ln
+    assert cjmps == 3, f"expected 3 cjmp entries, got {cjmps}"
+
+    print("multi-elif cascade smoke test OK")

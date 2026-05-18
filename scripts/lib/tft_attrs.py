@@ -178,6 +178,130 @@ def parse_page_directory(data: bytes, pageadd: int, pageqyt: int) -> list[dict]:
     return out
 
 
+OBJXINXI_ENTRY_SIZE = 232
+ATTSTRPIANYI_OFFSET = 52
+ATTSTRPIANYI_SIZE = 180
+ATTSTRPIANYI_SLOT_COUNT = 88
+
+
+@dataclass
+class ObjxinxiEntry:
+    """One decoded 232-byte objxinxi entry.
+
+    Layout (see ``findings/attribute-records.md`` for the derivation):
+
+    - +0   u8  ``lei`` (component type code, e.g. 121 = GuiObjPage, 59 = XFloat)
+    - +1   u8  ``id``  (instance id)
+    - +2   u16 (constant 0x3700; meaning unknown)
+    - +4   u32 ``init_off`` (strdata-relative offset of init bytecode;
+                            mirrored at +52)
+    - +28  u32 ``objdatarampos`` (offset into page media blob)
+    - +44  u16 ``w``
+    - +46  u16 ``h``
+    - +48  u16 ``endx`` (= x + w − 1)
+    - +50  u16 ``endy`` (= y + h − 1)
+    - +52  u32 ``attstr_bytecode_offset`` (Attstrpianyi.bytecode_offset;
+                                          equals ``init_off``)
+    - +56..+231: 88 × u16 ``slots`` indexed by AppAttNames[N]; each slot
+       holds the record_index into the page-wide allattbytes table, or
+       0xffff for "no record".
+    """
+    lei: int
+    id: int
+    init_off: int
+    objdatarampos: int
+    w: int
+    h: int
+    endx: int
+    endy: int
+    attstr_bytecode_offset: int
+    slots: list[int]                 # 88 entries; 0xffff for unused
+    raw: bytes                       # original 232-byte slice
+
+    def populated_slots(self) -> list[tuple[int, int]]:
+        """Return ``[(slot_index, record_index), ...]`` for filled slots."""
+        return [(n, v) for n, v in enumerate(self.slots) if v != 0xFFFF]
+
+
+def parse_objxinxi_entry(entry: bytes) -> ObjxinxiEntry:
+    """Decode one 232-byte objxinxi entry."""
+    if len(entry) < OBJXINXI_ENTRY_SIZE:
+        raise ValueError(f"need {OBJXINXI_ENTRY_SIZE} bytes, got {len(entry)}")
+    lei = entry[0]
+    obj_id = entry[1]
+    init_off = struct.unpack_from("<I", entry, 4)[0]
+    objpos = struct.unpack_from("<I", entry, 28)[0]
+    w, h, endx, endy = struct.unpack_from("<HHHH", entry, 44)
+    bcode = struct.unpack_from("<I", entry, ATTSTRPIANYI_OFFSET)[0]
+    slots = list(struct.unpack_from(
+        f"<{ATTSTRPIANYI_SLOT_COUNT}H",
+        entry,
+        ATTSTRPIANYI_OFFSET + 4,
+    ))
+    return ObjxinxiEntry(
+        lei=lei, id=obj_id, init_off=init_off, objdatarampos=objpos,
+        w=w, h=h, endx=endx, endy=endy,
+        attstr_bytecode_offset=bcode, slots=slots,
+        raw=bytes(entry[:OBJXINXI_ENTRY_SIZE]),
+    )
+
+
+def parse_objxinxi(data: bytes, objxinxiadd: int, objqyt: int) -> list[ObjxinxiEntry]:
+    """Decode ``objqyt`` consecutive objxinxi entries starting at file
+    offset ``objxinxiadd``."""
+    out: list[ObjxinxiEntry] = []
+    for i in range(objqyt):
+        off = objxinxiadd + i * OBJXINXI_ENTRY_SIZE
+        out.append(parse_objxinxi_entry(data[off:off + OBJXINXI_ENTRY_SIZE]))
+    return out
+
+
+# Field layout for the 76-byte ``appinf1`` plaintext (F-series).
+# See ``findings/attribute-records.md#corrections-to-other-findings``
+# and ``findings/main-hmi-config.md``.
+APPINF1_LAYOUT: list[tuple[str, str, int]] = [
+    ("staticstrBeg", "<I", 0x00),
+    ("AppAllvasAddr", "<I", 0x04),
+    ("AppAllvasQty", "<I", 0x08),
+    ("attdataaddr", "<I", 0x0c),
+    ("resourcesfileddr", "<I", 0x10),
+    ("strdataaddr", "<I", 0x14),
+    ("pageadd", "<I", 0x18),
+    ("objxinxiadd", "<I", 0x1c),
+    ("picxinxiadd", "<I", 0x20),
+    ("gmovxinxiadd", "<I", 0x24),
+    ("videoxinxiadd", "<I", 0x28),
+    ("wavxinxiadd", "<I", 0x2c),
+    ("zimoxinxiadd", "<I", 0x30),
+    ("MainCodeHex", "<I", 0x34),
+    ("pageqyt", "<H", 0x38),
+    ("objqyt", "<H", 0x3a),
+    ("picqyt", "<H", 0x3c),
+    ("gmovqyt", "<H", 0x3e),
+    ("videoqyt", "<H", 0x40),
+    ("wavqyt", "<H", 0x42),
+    ("zimoqyt", "<H", 0x44),
+]
+
+
+def pack_appinf1(orig_h2_plain: bytes, fields: dict) -> bytes:
+    """Re-pack the 76-byte ``appinf1`` plaintext with new field values.
+
+    ``orig_h2_plain`` must be the H2 plaintext (196 bytes); only the
+    first 76 are the structured ``appinf1`` — the rest is ``0xff``
+    padding (see ``findings/h2-trailing.md``) and is preserved.
+
+    ``fields`` provides the new values; every key in :data:`APPINF1_LAYOUT`
+    must be present.
+    """
+    out = bytearray(orig_h2_plain)
+    for name, fmt, off in APPINF1_LAYOUT:
+        if name not in fields:
+            raise KeyError(f"missing appinf1 field {name!r}")
+        struct.pack_into(fmt, out, off, fields[name])
+    return bytes(out)
+
+
 def parse_appinf1_corrected(plain_h2: bytes) -> dict:
     """Decode the F-series appinf1 (76-byte plaintext H2) using the
     real field offsets recovered from hmitype.dll.

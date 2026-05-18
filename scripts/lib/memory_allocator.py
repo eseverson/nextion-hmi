@@ -70,6 +70,58 @@ SIZEOF_OBJDATA: Dict[int, int] = {
 
 
 # ---------------------------------------------------------------------------
+# PARAM_HEAD_SIZES
+# Byte size of each ``<Kind>_PARAM_Head`` ValueType struct in hmitype.dll.
+# This is the FIXED-portion prefix every component allocates in public
+# memory before its declared attrs land. The frame-offset formula
+# ``obj.memorypos + Upatt0.attposup`` needs this to position
+# ``Upatt0.attposup`` correctly inside the per-component allocation.
+#
+# Almost every component has the same layout
+# ``_PARAM_Head { objdata_Ram objram; objeffecttype objeffect; }``
+# = objdata_Ram(52) + objeffecttype(4) = 56 bytes.
+#
+# objdata_Ram = 4×u8 + eventtyte(24) + i32 + 4×u8 + 8×i16 = 52
+# objeffecttype = u8 + u8 + u16                            = 4
+# eventtyte = 6 × u32                                       = 24
+#
+# Exceptions: Timer / Touchcap have no `objdata_Ram` (28 bytes).
+# Vari has only 4 bytes (4 × u8 head).
+#
+# Recovered from /tmp/hmitype_all.il struct declarations:
+#   .class nested public sequential ansi sealed beforefieldinit
+#   <Kind>_PARAM_Head extends [mscorlib]System.ValueType
+# (with GText_PARAM_Head / Printer3D_PARAM_Head top-level instead).
+# No class-level size constants exist; sizes are summed from
+# field widths assuming standard CLR `sequential` packing.
+#
+# Hotspot (LEI 109) reuses GuiObjTouch's Touch_PARAM_Head (56 bytes).
+# ---------------------------------------------------------------------------
+
+PARAM_HEAD_SIZES: Dict[str, int] = {
+    "Page":     56,   # GuiObjPage
+    "Pic":      56,   # GuiObjPic
+    "Picc":     56,   # GuiObjPicc
+    "Text":     56,   # GuiObjText
+    "Button":   56,   # GuiObjButton
+    "Button_T": 56,   # GuiObjButton_T
+    "Prog":     56,   # GuiObjProg
+    "CheckBox": 56,   # GuiObjCheckBox
+    "Radio":    56,   # GuiObjRadio
+    "Slider":   56,   # GuiObjSlider
+    "Xfloat":   56,   # GuiObjXfloat
+    "Qrcode":   56,   # GuiObjQrcode
+    "Curve":    56,   # GuiObjCurve
+    "Zhizhen":  56,   # GuiObjZhizhen (gauge)
+    "GText":    56,   # GuiObjGText (top-level, not nested)
+    "Touch":    56,   # GuiObjTouch — Hotspot (LEI 109)
+    "Timer":    28,   # 4×u8 + eventtyte (no objdata_Ram)
+    "Touchcap": 28,   # 4×u8 + eventtyte
+    "Vari":      4,   # 4×u8 only — no objdata_Ram, no eventtyte
+}
+
+
+# ---------------------------------------------------------------------------
 # ATTPOSUP_TABLE
 # Per-type, per-attribute byte offset *within* the allocated block.
 # "attpos" here means the distance from the component's memorypos to the

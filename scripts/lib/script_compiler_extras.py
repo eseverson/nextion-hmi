@@ -421,10 +421,32 @@ def patch_close_with_else(cglist: list[bytes], ifstack: list[IfFrame],
 
 
 def emit_label_marker(addr: int = 0) -> bytes:
-    """Emit the `L <addr>` opcode the editor places before every while/for
-    loop. Function unclear (likely a debug label-table entry). Encoder
-    emits this for byte-for-byte parity; safe to omit if not aiming for
-    perfect round-trip."""
+    """Emit the `L <addr>` opcode that precedes every while/for loop.
+
+    Wire format: ``"L " (0x4c 0x20) + 0x03 (long-int marker) + u32 LE
+    addr`` — 7 bytes. The on-disk form has a 4-byte length prefix
+    (``07 00 00 00``) prepended by the flatten layer.
+
+    Function (resolved 2026-05-17 from IL inspection): pair-marker for
+    suspend/resume of running event handlers. Each event handler emits
+    a leading `S` marker; every `L` references its `S` via an
+    arbitrary `biaoji` key set at compile time. At TFT-output time
+    `appbianyi::Makestrsbytes` patches each L's `addr` field to point
+    at the byte immediately following its paired S
+    (``S.strdatapos + 4 + 7``).
+
+    At runtime, `CodeRun_Run` (IL ~119010) reads L's `addr` ONLY when
+    ``myappinf::RunHexPos != -1`` (i.e. resuming a suspended handler).
+    Cold-start execution skips L entirely. So for any project that
+    doesn't suspend/resume mid-handler (which is most of them), an
+    ``addr = 0`` dummy is functionally correct.
+
+    For byte-for-byte editor parity, callers would need to:
+      1. Emit an ``S`` marker at the start of each event handler with
+         a unique ``biaoji``.
+      2. Track each ``L``'s biaoji and patch its address after the
+         final byte layout is known.
+    """
     return b"\x4c\x20\x03" + struct.pack("<I", addr)
 
 

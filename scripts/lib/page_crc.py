@@ -68,6 +68,52 @@ def crc32_bytewise(seed: int, data: bytes) -> int:
     return r & 0xFFFFFFFF
 
 
+def crc32_T(seed: int, data: bytes) -> int:
+    """4-byte-block variant of the Nextion CRC mixing kernel
+    (``CRC32_T`` at ``achmi.dll!.text:0x10007990``).
+
+    Same polynomial and table as :func:`crc32_bytewise`, but each
+    iteration XORs a full little-endian u32 word into the running CRC,
+    then runs the same four mixing rounds.
+
+    The native routine requires the data pointer and length to be
+    4-byte aligned; if not, it returns the seed unchanged.
+
+    Used by the HMI top-level directory checksum (combined with the
+    ``"ADEC"`` sentinel — see :func:`directory_checksum`).
+    """
+    if len(data) % 4 != 0:
+        return seed & 0xFFFFFFFF
+    r = seed & 0xFFFFFFFF
+    for i in range(0, len(data), 4):
+        dword = int.from_bytes(data[i:i + 4], "little")
+        r ^= dword
+        for _ in range(4):
+            r = ((r << 8) & 0xFFFFFFFF) ^ TAB256[(r >> 24) & 0xFF]
+    return r
+
+
+# 4-byte constant XORed into the directory checksum after the entry
+# table. ASCII ``"ADEC"``, baked into ``achmi.dll`` at
+# ``.rdata:0x1001dbc4``.
+DIRECTORY_CRC_SENTINEL = b"ADEC"
+
+
+def directory_checksum(directory_bytes: bytes) -> int:
+    """Compute the 4-byte checksum the editor stores immediately after
+    the HMI directory entries (at file offset ``4 + count * 28``).
+
+    ``directory_bytes`` must be the contiguous bytes of
+    ``(u32 count) + (count × 28-byte entries)``. The result is
+    :func:`crc32_T` over those bytes plus a 4-byte ``"ADEC"`` sentinel
+    (the same constant the native code reads from ``.rdata:0x1001dbc4``).
+
+    Verified against the baseline, 07_add_hotspot, and miata-dash
+    HMI fixtures — every stored checksum reproduces.
+    """
+    return crc32_T(0xFFFFFFFF, directory_bytes + DIRECTORY_CRC_SENTINEL)
+
+
 def page_crc(blob: bytes) -> int:
     """Return the 32-bit CRC stored at page[0:4] for a `*.pa` blob.
 

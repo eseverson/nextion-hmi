@@ -1,4 +1,5 @@
 tools/
+!scripts/tools/
 .venv/
 __pycache__/
 *.pyc
