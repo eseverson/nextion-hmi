@@ -24,6 +24,14 @@ the F-series device runtime.
 - [`achmi-internals.md`](achmi-internals.md) — How the editor's
   `achmi.dll` is unpacked, plus the 200-entry dispatch table that
   contains the file-format primitives.
+- [`directory-checksum.md`](directory-checksum.md) — HMI top-level
+  directory checksum (`CRC32_T` over entries + `"ADEC"` sentinel),
+  validated by `CFSOpenSystem` on every editor open. Reference impl:
+  [`scripts/lib/page_crc.directory_checksum`](../scripts/lib/page_crc.py).
+- [`authoring.md`](authoring.md) — Working programmatic add-component
+  tools for both HMI (editor round-trip) and TFT (direct flash) paths.
+  Covers `add_hotspot.py`, `add_hotspot_tft.py`, `add_xfloat_tft.py`,
+  their mechanics, and current limitations.
 
 ## Authoring research
 

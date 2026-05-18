@@ -73,7 +73,8 @@ The encrypted region is 196 bytes long; the `appinf1` struct itself is
 
 ```
 +0x00   u32   staticstrBeg              (start of static-string region)
-+0x04   u32   AppAllvasAddr             (global variables address)
++0x04   u32   AppAllvasAddr             (global variables address;
+                                          strdata-relative — see below)
 +0x08   u32   AppAllvasQty              (global variables count)
 +0x0c   u32   attdataaddr               (page-attribute records region)
 +0x10   u32   resourcesfileddr          (=0x10000)
@@ -110,6 +111,45 @@ that's wrong on F-series — counts are u16 starting at `+0x38` and the
 address slots above are distinct. Source of truth is
 `hmitype.dll!appinf1` as decompiled in
 [`achmi-internals.md`](achmi-internals.md).
+
+### AppAllvas — global scalar name table
+
+`AppAllvasAddr` is a strdata-relative pointer. The table is
+`AppAllvasQty` entries × 12 bytes:
+
+```
++0   u32   name_hash      # crc32_bytewise(name)  — the page-CRC kernel
+                          # over the global's ASCII name, e.g. "sys0"
++4   u32   offset         # byte offset of the global within the
+                          # global-variable memory area (sys0=0, sys1=4,
+                          # sys2=8, plus 4 bytes per user-declared int)
++8   u32   type           # type code; 9 (= attlei nibble for SS32) for
+                          # `int` globals — only type observed so far
+```
+
+For both miata-dash and `17_more_components` the table is byte-identical:
+
+```
+[0]: fb ba 73 d0  08 00 00 00  09 00 00 00   sys2  @ +8  int
+[1]: 95 81 f1 d9  00 00 00 00  09 00 00 00   sys0  @ +0  int
+[2]: 22 9c 30 dd  04 00 00 00  09 00 00 00   sys1  @ +4  int
+```
+
+The hashes match `crc32_bytewise(0xFFFFFFFF, name.encode("ascii"))`
+for `sys2`/`sys0`/`sys1`. Insertion order is not alphabetical — likely
+a hash-bucket order or declaration order; the runtime almost
+certainly looks them up by linear scan since `AppAllvasQty` is small
+in real projects.
+
+Both projects include the 3 implicit `sys0/sys1/sys2` declarations
+from `Program.s`. User-declared `int foo=0` globals would extend the
+table; we don't yet have a fixture with explicit user globals to
+verify.
+
+`AppAllvas` is NOT the component-name resolver — component names like
+`x0` or `m0` don't appear here, by hash or otherwise. The mechanism
+the runtime uses to resolve serial commands like `x9.val=42` is still
+opaque; see [`next-steps.md`](next-steps.md) "Last blocker".
 
 H2 encryption details and the cipher implementation live in
 [`h2-cipher.md`](h2-cipher.md). H2 is fully decryptable and

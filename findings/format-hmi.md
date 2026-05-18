@@ -204,6 +204,44 @@ Component overhead (an empty Hotspot added to a page) is **+516 bytes**:
 every component has a fixed-size attribute record plus per-event slot
 allocation, even when no events are bound.
 
+### Attribute record format inside a component (HMI side)
+
+Each attribute is a variable-size record:
+
+```
++0    u8    typebyte         # see encoding below
++1    u8    0
++2    u8    0
++3    u8    0
++4    8B    attr name        # null-padded ASCII (e.g. "objname\0")
++12   8B    0x00 * 8         # zero padding
++20   N×u8  value             # N = typebyte & 0x0f
+```
+
+Total record size = 20 + N bytes.
+
+The typebyte encodes the value-area width in its low nibble:
+
+| Typebyte | Value width | Used for                                     |
+|----------|-------------|----------------------------------------------|
+| `0x11`   | 1 byte      | UU8 attrs (id, type, vscope, drag, sendkey, …) |
+| `0x12`   | 2 bytes     | UU16 / Color / short Sstr (≤2 bytes inline)  |
+| `0x14`   | 4 bytes     | SS32 / Sstr ≤4 bytes (e.g. time literal)     |
+| `0x17`   | 7 bytes     | Sstr ≤7 bytes                                |
+| `0x1e`   | 14 bytes    | Sstr ≤14 bytes — the **maximum** objname size |
+
+The editor picks the smallest typebyte that fits the attribute's
+value. `objname` is canonically stored as `0x1e` in current editor
+versions (Nextion Editor 1.67.x); older fixtures (e.g. `07_add_hotspot`)
+use `0x12` for 2-byte names. Both formats load successfully — the
+editor accepts the smaller-typebyte form but rewrites to `0x1e` on
+save when the name's max length permits.
+
+Confirmed against `/tmp/14_char_name.HMI` (a Hotspot manually renamed
+to 14 ASCII `'a'` characters in the editor): the objname record
+becomes `1e 00 00 00 "objname\0" 8×0x00 "aaaaaaaaaaaaaa"` — 34 bytes
+total (4 header + 8 name + 8 pad + 14 value).
+
 ## Coordinate encoding under rotation
 
 Page-level orientation lives at H1+0x14 of the TFT (not in the HMI

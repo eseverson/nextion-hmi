@@ -48,6 +48,7 @@ exact reproduction steps.
 | 15| picture               | `[x]`  | Added one Picture component. TFT grew by 132 KB (picture pixel data). Confirmed H2 schema deviation: F-series `pictures_count` is at H2+0x3a, not H2+0x34 as in T0/K0. |
 | 16| loop                  | `[x]`  | Added `for(int qq=0; qq<5; qq=qq+1)` to one handler. T6 (control-flow opcodes) decoded: `09 00 04 = cjmp`, `54 20 = jmp`. Loop literals use ASCII (`5`=`0x35`), not int-literal form. Global memory directory grows by 4 bytes per declared local. |
 | 17| more_components       | `[x]`  | Sim regression fixture covering Waveform, CropPicture, DualStateButton, ScrollingText, Checkbox, Radio, QRCode, Gauge. Used to drive type-specific renderer defaults and the per-component init-bytecode disassembler. |
+| 23| minimal_project       | `[x]`  | One empty page, one object (the Page itself). Falsified the "H2[0x40..0xC4] = 4×32-byte rows" hypothesis (it's just 0xff padding) and cracked the 232-byte `objxinxi` entry layout, including the 180-byte `Attstrpianyi` slot table. See [`attribute-records.md`](attribute-records.md#objxinxi-entry-layout-per-component-232-bytes). |
 
 ## Queued experiments
 
@@ -197,29 +198,16 @@ chain). The leading u32 of each blob has the shape of a CRC.
 **Answers**: H5. Likely small modification of
 [`scripts/lib/page_crc.py`](../scripts/lib/page_crc.py).
 
-### Stable region decode (advances H2 trailing region)
+### Stable region decode (advances H2 trailing region) — RESOLVED
 
-**Folder**: `tests/editor outputs/23_minimal_project/`
-
-**Goal**: Build the smallest possible project (one empty page, no
-components, no events) and capture its HMI+TFT. The `H2[0x40..0xC4]`
-region (decrypted) should be much smaller / simpler than for a
-populated project, making its 4×32-byte row structure easier to
-identify.
-
-**Steps**:
-1. In a fresh editor session, **File → New Project**.
-2. Select the same model as the working project (`NX4832F035_011`).
-3. Don't add any components.
-4. Save as `iter_min.{HMI,tft}`.
-
-**Expected diff** (decrypted H2 vs. populated project):
-- `pageqyt = 1`, all other counts = 0.
-- The 4×32-byte rows at `0x40..0xC4` should be either nearly empty or
-  reveal a clear "per-page row" pattern. Rows that disappear here are
-  the per-component rows.
-
-**Answers**: Structure of the `H2[0x40..0xC4]` trailing region.
+Captured 2026-05-17. Outcome: the "4×32-byte row" hypothesis was wrong —
+`H2[0x4c..0xc4]` is 120 bytes of `0xff` padding (matching
+[`h2-trailing.md`](h2-trailing.md)). Instead the per-page/per-component
+metadata lives in the `pagexinxi` directory (16 bytes per page at
+`appinf1.pageadd`) and the `objxinxi` directory (232 bytes per object at
+`appinf1.objxinxiadd`); the latter contains an inline 180-byte
+`Attstrpianyi` block. See
+[`attribute-records.md`](attribute-records.md#objxinxi-entry-layout-per-component-232-bytes).
 
 ### Multi-model project compile (closes H4)
 

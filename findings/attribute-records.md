@@ -406,6 +406,98 @@ marker is a sequence of `binattinf.attmemorypos` values being read as
 contiguous "Variable.val" fields — coincidentally aligned because every
 Variable component happens to produce a `val=SS32` attribute.
 
+## objxinxi entry layout (per-component, 232 bytes)
+
+Cracked by decoding `tests/editor outputs/23_minimal_project/23.tft` (one
+empty page, one object — the Page itself) and cross-checking against
+`17_more_components/17.tft`.
+
+```
+offset  size  field
+  +0    u8    lei            # component type (e.g. 121 = GuiObjPage,
+                             #   59 = GuiObjXfloat)
+  +1    u8    id             # instance id
+  +2    u16   ??             # constant 0x3700 across every entry seen so
+                             #   far; meaning unknown
+  +4    u32   init_off       # offset (rel strdata) of this component's
+                             #   init bytecode; mirrored at +52
+  +8    20×0xff              # padding
+  +28   u32   objdatarampos  # byte offset of this component's
+                             #   `objdata_Ram` inside the page media blob
+                             #   (matches `binattinf.objdatarampos`)
+  +32   12 bytes ??          # mostly zeros; byte +34 is 0x7f (= 127)
+                             #   for every entry; meaning unknown
+  +44   u16   w
+  +46   u16   h
+  +48   u16   endx           # = x + w − 1
+  +50   u16   endy           # = y + h − 1
+  +52..+231   Attstrpianyi   # 180 bytes:
+                             #   +0..+3:  u32 bytecode_offset (= init_off)
+                             #   +4..+179: 88 × u16 slots, indexed by
+                             #             AppAttNames[N]; each slot holds
+                             #             the record_index into the
+                             #             page-wide allattbytes table, or
+                             #             0xffff for "no record"
+= 232 bytes per object
+```
+
+Page-aligned trailing padding (0xff) follows the last object in the
+`objxinxiadd` region. The page directory's `objstar` indexes the first
+object on a page; `objqyt` counts how many consecutive entries belong to
+that page.
+
+### Confirmed slot → record_index examples
+
+Minimal project's Page (`23.tft`, obj 0):
+
+| AppAttNames slot | name   | record_index | record contents              |
+|------------------|--------|--------------|------------------------------|
+| 62               | lei    | 0            | attlei=0x1, val=121          |
+| 49               | id     | 1            | attlei=0x1, val=0            |
+| 1                | vscope | 3            | attlei=0x1, val=0            |
+| 42               | x      | 9            | attlei=0xb, val=0            |
+| 43               | y      | 10           | attlei=0xc, val=0            |
+| 46               | w      | 11           | attlei=0xd, val=480          |
+| 47               | h      | 12           | attlei=0xe, val=320          |
+| 44               | endx   | 13           | attlei=0x8 (SS16), val=479   |
+| 45               | endy   | 14           | attlei=0x8 (SS16), val=319   |
+| 2                | sta    | 23           | attlei=0x1, val=0            |
+| 4                | bco    | 24           | attlei=0x2 (UU16/Color)      |
+
+Per-page table size: each component reserves a contiguous record range
+sized to its component class. Page = 33 records (records 0..32 in the
+minimal table); XFloat = 41 records (records 33..73 in fixture 17 page 0
+between obj0=Page and obj2=second Xfloat). Inside that range, most slots
+have `attlei=0` (the encoder leaves them empty); only AppAttNames slots
+that the type's `GetAtts_WithNoHead` actually uses get filled records.
+
+### What this resolves
+
+- **Per-page record indexing**: no longer "an open puzzle". Each
+  component's Attstrpianyi is the per-component lookup table; the record
+  it points to is the live attribute value. The records themselves are
+  sparse-by-design.
+- **Queued experiment 23** ("H2 trailing-region 4×32-byte rows"): the
+  hypothesised row structure does not exist. Bytes `H2[+0x4c..+0xc4]`
+  are 120 bytes of `0xff` padding (already confirmed by
+  [`h2-trailing.md`](h2-trailing.md)); the per-page metadata that the
+  rows would have held lives in the `pagexinxi` directory at `pageadd`
+  and the `objxinxi` directory at `objxinxiadd`, both decoded above.
+
+### Still open
+
+1. **Per-component stride** in the page-wide record table: Page = 33,
+   XFloat = 41. The function `class_name → stride` is not yet pinned
+   down; might be `(max_appatt_slot_used + 1)` rounded up, or a per-class
+   constant from a `hmitype.dll` table. Decoding obj1..obj49 of fixture
+   17 systematically and tabulating stride per type would close this in
+   one pass.
+2. **`hdr[+2..+3] = 0x3700`** constant: present on every entry; unknown
+   purpose.
+3. **`hdr[+32..+43]` 12-byte block**: mostly zeros; byte +34 = 0x7f
+   constant; remaining bytes vary subtly between entries. May hold flags
+   or a secondary memory pointer.
+
 ## Cross-references
 
 - **Test fixtures** in `nextion/tests/editor outputs/`:

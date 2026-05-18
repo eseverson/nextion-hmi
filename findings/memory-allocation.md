@@ -522,16 +522,21 @@ of the project's content — most likely model- or H1-derived).
    parse the trailing region without walking u32-pairs. Not
    load-bearing for the encoder.
 
-4. **`encode=3` in H2 vs raw usercode.** The two
-   editor-output fixtures in
-   `tests/editor outputs/15_picture` and `17_more_components`
-   start their usercode region with bytes that look XOR-scrambled
-   (`d8 07 24 c8 ...` repeating with high-nibble bias). The
-   project's TFT and `16_loop` are plaintext. `h2.encode == 3` in
-   all four cases, so that field isn't the difference. There's
-   either a separate per-section encryption controlled by another
-   field, or those test fixtures were exported by a different
-   editor version. Out of scope for the allocator question.
+4. **`encode=3` in H2 vs raw usercode.** *Resolved (2026-05-17): not
+   encryption.* The "scrambled" bytes at file offset
+   `0x70000..0x80000` in `15_picture/15.tft` and
+   `17_more_components/17.tft` are `.zi` font payload — those
+   fixtures have a font that's large enough to overflow into the
+   region that the smaller `16_loop` fixture uses for its
+   usercode. Resource directory slot 8 (fonts) ends inside the
+   `0x70000..0x80000` window in 15/17, so the bytes are glyph row
+   data (the repeating `e0 12 cf 22` / `1f` runs are font run-length
+   patterns), not bytecode. The usercode in 15/17 actually starts
+   at `0x80000` (i.e., `strdataaddr` per `appinf1`). No separate
+   encryption exists — `appbianyi::Lstrbyteaddstring` (hmitype IL
+   line 339795) appends every bytecode block verbatim, and
+   `tft_init_encoder.py`'s self-tests already round-trip
+   byte-identically for all known opcode/attr combinations.
 
 5. **`function_objdataraminmemory` switch.** Two layout variants
    exist: when set, per-page private memory uses 1-byte ID slots per
