@@ -68,6 +68,31 @@ def crc32_bytewise(seed: int, data: bytes) -> int:
     return r & 0xFFFFFFFF
 
 
+OBJNAME_FIELD_SIZE = 14
+
+
+def hash_objname(name: str | bytes) -> int:
+    """Compute the TFT component-name lookup hash for an objname.
+
+    The TFT stores names as `crc32_bytewise(0xffffffff, name.ljust(14, b'\\x00'))`.
+    The 14-byte width matches the HMI typebyte 0x1e objname field. The padding
+    is significant: hashing the unpadded ASCII gives a different value (e.g.
+    `hash_objname("xixr") = 0xff6ddc1f` vs `crc32_bytewise(0xffffffff, b"xixr")
+    = 0x00067955`). Names ≥ 14 bytes are truncated.
+
+    Verified against `/tmp/collision.tft` and `/tmp/xixr.tft`:
+    `page0 -> 0xac967926, xixr -> 0xff6ddc1f, w621q -> 0xd1e1feb9,
+    x1 -> 0x08c28c7b`.
+    """
+    if isinstance(name, str):
+        name = name.encode("ascii")
+    if len(name) > OBJNAME_FIELD_SIZE:
+        name = name[:OBJNAME_FIELD_SIZE]
+    else:
+        name = name + b"\x00" * (OBJNAME_FIELD_SIZE - len(name))
+    return crc32_bytewise(0xFFFFFFFF, name)
+
+
 def crc32_T(seed: int, data: bytes) -> int:
     """4-byte-block variant of the Nextion CRC mixing kernel
     (``CRC32_T`` at ``achmi.dll!.text:0x10007990``).

@@ -464,13 +464,20 @@ HEAD_FIELDS: list[tuple[str, str, int, int]] = [
 ]
 
 
-def _resolve_value(type_name: str, value):
+def _resolve_value(type_name: str, value, allocator: "LongAttrAllocator | None" = None,
+                   *, attr_name: str = ""):
     """Pack ``value`` into the integer ``attmemorypos`` slot for ``type_name``.
 
     Numeric types pass through (signed → struct will handle); ``Sstr``
-    accepts a bytes/str up to 4 bytes and packs the bytes little-endian into
-    the int slot (>4-byte strings need a separate allocation path and are
-    rejected here for now).
+    accepts a bytes/str:
+
+    * Length ≤ 4: stored inline in ``attmemorypos`` (little-endian packed).
+    * Length > 4: requires ``allocator``. Returns a sentinel int that
+      the caller (``build_component_records``) recognises as "patch
+      this record later" — the allocator does the actual allocation in
+      a single pass once every component's records have been built (so
+      the cursor matches the editor's depth-first refallatt order; see
+      ``findings/memory-allocation.md``).
     """
     if type_name == "Sstr":
         if value is None or value == 0:
@@ -481,15 +488,194 @@ def _resolve_value(type_name: str, value):
             raise TypeError(
                 f"Sstr value must be bytes/str, got {type(value).__name__}"
             )
-        if len(value) > 4:
+        if len(value) <= 4:
+            return int.from_bytes(bytes(value).ljust(4, b"\x00"),
+                                  "little", signed=False)
+        if allocator is None:
             raise ValueError(
-                f"Sstr value {value!r} is {len(value)} bytes; values >4 bytes "
-                f"need a separate memory allocation (not implemented)."
+                f"Sstr value {value!r} is {len(value)} bytes; pass a "
+                f"`LongAttrAllocator` to `build_component_records` to "
+                f"enable long-string allocation."
             )
-        return int.from_bytes(value.ljust(4, b"\x00"), "little", signed=False)
+        # Queue a long-string allocation. The allocator returns a
+        # placeholder; the caller patches the record after the page's
+        # records are emitted.
+        return allocator.queue_sstr(attr_name, bytes(value))
     if value is None:
         return 0
     return int(value)
+
+
+# ---------------------------------------------------------------------------
+# Variable-length attribute allocator
+# ---------------------------------------------------------------------------
+#
+# Strings longer than 4 bytes, curve buffers (``molloc``) and binary
+# blobs (``binary``) don't fit inline in a binattinf's 4-byte
+# ``attmemorypos`` slot. The editor allocates space for them in a
+# separate memory region (per-page private memory, for the F-series
+# path) and stores the **byte offset within that region** in
+# ``attmemorypos``.  The companion ``<sstrname>_maxl`` Strlenth
+# attribute's ``attmemorypos`` holds the allocated capacity (in
+# bytes, including the NUL terminator for Sstr).
+#
+# See findings/memory-allocation.md for the editor's two-pass layout
+# inside ``appbianyi.StructHtoL``.
+
+# Sentinel placed in AttRecord.attmemorypos for queued allocations.
+# Replaced by the allocator's pass-2 ``finalize`` step.
+_PENDING_ALLOC_SENTINEL = -1
+
+
+@dataclass
+class _PendingAlloc:
+    """One queued variable-length allocation."""
+    kind: str              # "Sstr" | "molloc" | "binary"
+    payload: bytes         # init bytes (Sstr only) or b"" for dynamic
+    capacity: int          # bytes to reserve; ``len(payload)`` for Sstr
+    attr_name: str         # for diagnostics
+    pending_idx: int       # index into the allocator's pending list
+
+
+@dataclass
+class LongAttrAllocator:
+    """Two-pass allocator for variable-length attribute storage.
+
+    Mirrors ``hmitype.appbianyi.mollocmemory_add`` + the two layout
+    passes in ``appbianyi.StructHtoL`` (see findings/memory-allocation.md):
+
+      * Pass 1 — every component's records are built; each Sstr long
+        string / molloc / binary attribute calls ``queue_*``, getting
+        back a sentinel that is stored in the record's
+        ``attmemorypos`` field (alongside the corresponding
+        ``<name>_maxl`` Strlenth's ``attmemorypos`` set to the queued
+        index — see ``link_companion``).
+      * Pass 2 — ``finalize`` walks the queue in queue order
+        (init-data first, then dynamic), assigning a region-relative
+        byte offset to each entry and back-patching the records.
+
+    The allocator does not itself track which records to patch — the
+    caller is expected to call ``patch_records`` with the final
+    record list once every component on the page has been processed.
+
+    The allocator's cursor counts bytes within the per-page private
+    memory region. The caller supplies the starting cursor (typically
+    0 for a from-scratch page).
+    """
+    starting_offset: int = 0
+
+    def __post_init__(self) -> None:
+        self._pending: list[_PendingAlloc] = []
+        self._finalized: bool = False
+        # Records to patch: list of (record_ref, field, pending_idx,
+        # write_kind) tuples. ``record_ref`` is the AttRecord; ``write_kind``
+        # is one of "offset" (write decpos) or "capacity" (write mollocsize).
+        self._patches: list[tuple["AttRecord", int, str]] = []
+        # Total bytes consumed by init-data pass (for the "noinit
+        # follows initialised region" rule).
+        self.init_bytes: int = 0
+        self.dynamic_bytes: int = 0
+
+    @staticmethod
+    def _round4(n: int) -> int:
+        return (n + 3) & ~3
+
+    def queue_sstr(self, attr_name: str, value: bytes) -> int:
+        """Queue a long-string allocation. Returns the sentinel to
+        write into the record's ``attmemorypos`` (the caller MUST
+        register the record via :meth:`link_record` before
+        :meth:`finalize`)."""
+        # capacity = len(value) + 1 NUL, rounded up to 4 bytes.
+        raw = len(value) + 1
+        capacity = self._round4(raw)
+        pa = _PendingAlloc(kind="Sstr", payload=value + b"\x00",
+                           capacity=capacity, attr_name=attr_name,
+                           pending_idx=len(self._pending))
+        self._pending.append(pa)
+        return pa.pending_idx
+
+    def queue_molloc(self, attr_name: str, capacity: int) -> int:
+        """Queue a dynamic ``molloc`` (curve / waveform) buffer."""
+        capacity = self._round4(capacity)
+        pa = _PendingAlloc(kind="molloc", payload=b"",
+                           capacity=capacity, attr_name=attr_name,
+                           pending_idx=len(self._pending))
+        self._pending.append(pa)
+        return pa.pending_idx
+
+    def queue_binary(self, attr_name: str, capacity: int) -> int:
+        """Queue a dynamic ``binary`` buffer."""
+        capacity = self._round4(capacity)
+        pa = _PendingAlloc(kind="binary", payload=b"",
+                           capacity=capacity, attr_name=attr_name,
+                           pending_idx=len(self._pending))
+        self._pending.append(pa)
+        return pa.pending_idx
+
+    def link_record(self, record: "AttRecord", pending_idx: int,
+                    *, write_kind: str = "offset") -> None:
+        """Register a record to be patched by :meth:`finalize`.
+
+        Args:
+            record: AttRecord whose ``attmemorypos`` should be replaced.
+            pending_idx: Index returned by ``queue_*``.
+            write_kind: ``"offset"`` writes the assigned byte offset
+                (the Sstr / molloc / binary record's own pointer).
+                ``"capacity"`` writes the allocated size in bytes —
+                used for the paired ``<name>_maxl`` Strlenth record.
+        """
+        if write_kind not in ("offset", "capacity"):
+            raise ValueError(f"unknown write_kind: {write_kind!r}")
+        self._patches.append((record, pending_idx, write_kind))
+
+    def finalize(self) -> bytes:
+        """Run the two-pass layout, patch all linked records, and
+        return the concatenated memory-region bytes (initialised
+        portion + dynamic portion zeros — the dynamic tail is left
+        zero-filled because the runtime doesn't depend on its
+        contents).
+        """
+        if self._finalized:
+            raise RuntimeError("finalize() called twice")
+        cursor = self.starting_offset
+        offsets: list[int] = [0] * len(self._pending)
+        out = bytearray()
+        # Pass 1: init-data (Sstr) entries.
+        for pa in self._pending:
+            if pa.kind != "Sstr":
+                continue
+            offsets[pa.pending_idx] = cursor
+            # Write the payload, pad with zeros to capacity.
+            pad = pa.capacity - len(pa.payload)
+            out += pa.payload + b"\x00" * pad
+            cursor += pa.capacity
+        # Pad cursor to 4 (already aligned because capacities are
+        # rounded, but the StructHtoL pass does an explicit align here).
+        while cursor & 3:
+            out += b"\x00"
+            cursor += 1
+        self.init_bytes = cursor - self.starting_offset
+        # Pass 2: dynamic (molloc, binary).
+        for pa in self._pending:
+            if pa.kind == "Sstr":
+                continue
+            offsets[pa.pending_idx] = cursor
+            cursor += pa.capacity
+        self.dynamic_bytes = (cursor - self.starting_offset) - self.init_bytes
+        # Apply patches.
+        for record, pending_idx, write_kind in self._patches:
+            if write_kind == "offset":
+                record.attmemorypos = offsets[pending_idx]
+            else:  # "capacity"
+                record.attmemorypos = self._pending[pending_idx].capacity
+        self._finalized = True
+        return bytes(out)
+
+    @property
+    def total_bytes(self) -> int:
+        if not self._finalized:
+            raise RuntimeError("finalize() first")
+        return self.init_bytes + self.dynamic_bytes
 
 
 def build_component_records(
@@ -507,6 +693,7 @@ def build_component_records(
     authored: dict | None = None,
     str_encodeh_star: int | None = None,
     resource_counts: dict[str, int] | None = None,
+    allocator: "LongAttrAllocator | None" = None,
 ) -> list[AttRecord]:
     """Build the full ``refallatt`` record list for a single component.
 
@@ -539,11 +726,22 @@ def build_component_records(
     explicitly set in ``authored``, ``num_maxval`` is set to
     ``resource_counts[type_name] - 1``.
 
-    Limitations:
-    - ``Sstr`` attrs with values longer than 4 bytes are not supported; the
-      separately-allocated memory region for long strings is not yet
-      encoded (see ``findings/attribute-records.md`` "What's not yet figured
-      out", item 2).
+    ``allocator`` enables long-string / molloc / binary allocation. When
+    an Sstr attribute has a value longer than 4 bytes, the encoder
+    queues an allocation request with ``allocator`` and links both the
+    Sstr record (write_kind="offset") AND its paired
+    ``<sstrname>_maxl`` Strlenth record (write_kind="capacity"). The
+    caller must invoke ``allocator.finalize()`` once every component on
+    the page has been processed to materialise the byte offsets and
+    back-patch the records.
+
+    Without an allocator, attempting an Sstr value > 4 bytes raises
+    ValueError.
+
+    ``allocator`` also handles ``molloc`` (curve channel buffer) and
+    ``binary`` attrs: when a declared attr is of type ``molloc`` or
+    ``binary`` and ``authored`` provides ``<name>__capacity``, the
+    encoder queues a dynamic (no-init) reservation of that many bytes.
     """
     try:
         from .tft_attrs_schemas import TYPE_SCHEMAS
@@ -586,6 +784,13 @@ def build_component_records(
 
     _RESOURCE_ID_TYPES = {"Picid", "Fontid", "Videoid", "Gmovid",
                           "Audioid", "Pageid"}
+    # Track Sstr alloc queue indices so we can link the paired
+    # ``<name>_maxl`` Strlenth record when we encounter it later in
+    # the schema.
+    sstr_pending: dict[str, int] = {}  # base_name -> pending_idx
+    # Track records by attr name for back-references (Strlenth pairing).
+    declared_records: dict[str, AttRecord] = {}
+
     for attr_name, _attpos, type_name in schema:
         tv, df = ATTSHULEI_BY_NAME[type_name]
         value = authored.get(attr_name, 0)
@@ -598,9 +803,29 @@ def build_component_records(
         else:
             max_val = 0
         min_val = authored.get(f"{attr_name}__min", 0)
-        records.append(AttRecord(
+
+        # Variable-length attribute handling.
+        attmemorypos_value: int
+        if type_name == "Sstr":
+            attmemorypos_value = _resolve_value(type_name, value, allocator,
+                                                attr_name=attr_name)
+            # If the resolver queued an allocation, remember the
+            # pending index so we can link the paired Strlenth below.
+            if allocator is not None and isinstance(value, (bytes, str)):
+                bytes_val = value.encode("latin-1") if isinstance(value, str) else value
+                if len(bytes_val) > 4:
+                    sstr_pending[attr_name] = attmemorypos_value
+        elif type_name in ("binary", "BinyiANYTYPE") and allocator is not None \
+                and f"{attr_name}__capacity" in authored:
+            cap = int(authored[f"{attr_name}__capacity"])
+            attmemorypos_value = allocator.queue_binary(attr_name, cap)
+            sstr_pending[attr_name] = attmemorypos_value
+        else:
+            attmemorypos_value = _resolve_value(type_name, value)
+
+        rec = AttRecord(
             name=attr_name,
-            attmemorypos=_resolve_value(type_name, value),
+            attmemorypos=attmemorypos_value,
             num_maxval=max_val,
             num_minval=min_val,
             objdatarampos=objdatarampos,
@@ -614,7 +839,37 @@ def build_component_records(
             datafrom=True,
             ispv=True,
             pp=True,
-        ))
+        )
+        records.append(rec)
+        declared_records[attr_name] = rec
+
+        # If this record needs the allocator's offset, link it now.
+        if attr_name in sstr_pending and type_name in ("Sstr", "binary",
+                                                      "BinyiANYTYPE"):
+            # Reset attmemorypos to 0 (it currently holds the pending
+            # index; the allocator will write the real offset in
+            # finalize()).
+            rec.attmemorypos = 0
+            assert allocator is not None
+            allocator.link_record(rec, sstr_pending[attr_name],
+                                  write_kind="offset")
+
+        # Pair Strlenth records to their queued Sstr.
+        # Convention: paired name is ``<sstrname>_maxl`` (per
+        # findings/attribute-records.md). Some classes use ``_m``
+        # variant (path_m in GText/Gmov) — match either.
+        if type_name == "Strlenth":
+            base_name = None
+            for suffix in ("_maxl", "_m"):
+                if attr_name.endswith(suffix):
+                    candidate = attr_name[: -len(suffix)]
+                    if candidate in sstr_pending:
+                        base_name = candidate
+                        break
+            if base_name is not None and allocator is not None:
+                rec.attmemorypos = 0
+                allocator.link_record(rec, sstr_pending[base_name],
+                                      write_kind="capacity")
 
     return records
 
@@ -960,7 +1215,100 @@ def _self_test_layout_roundtrip() -> None:
           f"records reconstructed byte-identical)")
 
 
+def _self_test_long_attr_allocator() -> None:
+    """Verify LongAttrAllocator's two-pass layout against the rules in
+    findings/memory-allocation.md.
+
+    1. Short Sstr (≤4 bytes) stays inline — no allocation.
+    2. Long Sstr (>4 bytes) → ``mollocsize = len(value) + 1`` rounded up
+       to 4. Record's attmemorypos gets the assigned offset; paired
+       ``<name>_maxl`` Strlenth record gets the rounded capacity.
+    3. molloc / binary requests with no init data land in the dynamic
+       tail (after the Sstr init region), in queue order.
+    """
+    alloc = LongAttrAllocator(starting_offset=0)
+
+    # Build a GuiObjText with a long txt string.
+    long_value = b"Hello, Nextion!"   # 15 bytes; needs +1 NUL → 16 (round4)
+    recs = build_component_records(
+        "GuiObjText",
+        objdatarampos=0x100,
+        frompageid=0,
+        fromobjid=2,
+        component_id=2,
+        component_type=116,
+        x=0, y=69, w=160, h=31,
+        authored={"txt": long_value, "txt_maxl": 50},
+        allocator=alloc,
+    )
+    # Find the txt and txt_maxl records.
+    txt_rec = next(r for r in recs if r.name == "txt")
+    maxl_rec = next(r for r in recs if r.name == "txt_maxl")
+
+    # Before finalize, both should still hold their pre-patch values (we
+    # zeroed attmemorypos when we queued/linked).
+    assert txt_rec.attmemorypos == 0
+    assert maxl_rec.attmemorypos == 0
+
+    # Now add a Variable with a *short* string (≤4 bytes) — should NOT
+    # allocate.
+    short_recs = build_component_records(
+        "GuiObjVari",
+        objdatarampos=0x200,
+        frompageid=0,
+        fromobjid=23,
+        component_id=23,
+        component_type=52,
+        x=0, y=0, w=1, h=1,
+        authored={"txt": b"AB", "val": 0},
+        allocator=alloc,
+    )
+    short_txt = next(r for r in short_recs if r.name == "txt")
+    # Short Sstr packs into attmemorypos directly: b"AB\0\0" → 0x00004241
+    assert short_txt.attmemorypos == 0x00004241, (
+        f"short Sstr should inline; got 0x{short_txt.attmemorypos:08x}"
+    )
+
+    mem_bytes = alloc.finalize()
+
+    # Expected: long_value + b"\0" (NUL) + b"\0" (padding to 16 bytes).
+    expected_init = long_value + b"\x00" * (16 - len(long_value))
+    assert mem_bytes == expected_init, (
+        f"alloc bytes: {mem_bytes!r} vs expected {expected_init!r}"
+    )
+
+    # After finalize: txt record points at offset 0; maxl record holds
+    # the rounded capacity (16).
+    assert txt_rec.attmemorypos == 0, (
+        f"txt offset {txt_rec.attmemorypos}, expected 0"
+    )
+    assert maxl_rec.attmemorypos == 16, (
+        f"txt_maxl capacity {maxl_rec.attmemorypos}, expected 16"
+    )
+
+    # Now exercise molloc + binary in a second allocator.
+    alloc2 = LongAttrAllocator(starting_offset=0x40)
+    s1 = alloc2.queue_sstr("foo", b"hi!")          # 3 bytes + NUL → 4
+    s2 = alloc2.queue_sstr("bar", b"longer string") # 13 + NUL → 16
+    m1 = alloc2.queue_molloc("curve_a", 100)        # → 100 (already 4-aligned)
+    b1 = alloc2.queue_binary("blob", 13)            # 13 → 16
+    alloc2.finalize()
+    # init region:    foo @ 0x40 (4), bar @ 0x44 (16)  → 20 bytes init
+    # dynamic region: curve_a @ 0x58 (100), blob @ 0xbc (16)
+    # Check the queue stored offsets by re-running through a dummy
+    # AttRecord. We don't have a record path here, so just inspect the
+    # private state via re-queuing for testing.
+    # The init_bytes/dynamic_bytes split is the public verification.
+    assert alloc2.init_bytes == 4 + 16, alloc2.init_bytes
+    assert alloc2.dynamic_bytes == 100 + 16, alloc2.dynamic_bytes
+    assert alloc2.total_bytes == 4 + 16 + 100 + 16
+
+    print(f"PASS: LongAttrAllocator (init={alloc2.init_bytes} "
+          f"dynamic={alloc2.dynamic_bytes})")
+
+
 if __name__ == "__main__":
     _self_test()
     _self_test_build_component_records()
     _self_test_layout_roundtrip()
+    _self_test_long_attr_allocator()

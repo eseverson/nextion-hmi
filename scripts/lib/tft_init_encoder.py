@@ -125,7 +125,13 @@ OPCODE: dict[str, bytes] = {
     "draw3d":   bytes((0x09, 0x07, 0x08)),
     "nstr":     bytes((0x09, 0x13, 0x04)),
     "fstr":     bytes((0x09, 0x14, 0x04)),  # observed as 09 14 04 in 1.67.1
-    "zstr":     bytes((0x09, 0x15, 0x04)),
+    # zstr (bounded text render) is `09 17 04` in 1.67.1, verified against
+    # the Text / Button / Button_T / GText init blocks in
+    # `17_more_components/17.tft`. The `09 15 04` value in the older nxt-
+    # 1.65.1 table is for a different firmware; the 1.67.1 fixtures
+    # consistently use `09 17 04` for the 5-arg
+    # `zstr <x0>,<y0>,<x1>,<y1>,<txt>` draw.
+    "zstr":     bytes((0x09, 0x17, 0x04)),
     "xstr":     bytes((0x09, 0x14, 0x04)),  # collides with fstr in 1.67.1
     "fill":     bytes((0x09, 0x0d, 0x04)),
     "pic":      bytes((0x09, 0x01, 0x04)),
@@ -232,11 +238,20 @@ def _nstr() -> tuple:
 
 
 def _zstr_txt() -> tuple:
+    """Text/Button/Button_T zstr: 4 long-form 32767 bounds + LOAD(txt).
+
+    Verified against `17_more_components/17.tft` blocks @0x80721
+    (t0 zstr), @0x8186a (b0 zstr), @0x81dc9 (b0_t zstr). Each emits
+    32767 as the 5-byte long-form literal `03 ff 7f 00 00` (NOT ASCII)
+    because the editor's expression compiler uses the
+    `Strmake_StrToS32` long-form whenever a numeric token won't fit
+    in the inline-ASCII budget (>3 chars).
+    """
     return ('zstr', [
-        ('lit', '32767'), ('lit', ','),
-        ('lit', '32767'), ('lit', ','),
-        ('lit', '32767'), ('lit', ','),
-        ('lit', '32767'), ('lit', ','),
+        ('long', 32767), ('lit', ','),
+        ('long', 32767), ('lit', ','),
+        ('long', 32767), ('lit', ','),
+        ('long', 32767), ('lit', ','),
         ('attr', 'txt'),
     ])
 
@@ -311,8 +326,15 @@ def ref_templates(comp_type: int, attrs: dict) -> list[tuple]:
 
     if label in ("text", "gtext"):
         draw = _zstr_txt() if label == "text" else _zstr_vvs_txt()
-        sb = _setbrush(sta, mode=sta, pw_attr=("pw" if label == "text" else "pw_literal"),
-                       inline_spax_spay=True)
+        # text (116) has attposup == -1 for spax/spay (compile-time
+        # constant, inlined as ASCII). gtext (55) has attposup positive
+        # → spax/spay are LOAD operands.
+        # See findings/text-setbrush-variant.md for the dispatch table.
+        sb = _setbrush(
+            sta, mode=sta,
+            pw_attr=("pw" if label == "text" else "pw_literal"),
+            inline_spax_spay=(label == "text"),
+        )
         return [sb, draw]
 
     if label == "pic":
@@ -422,26 +444,39 @@ def ref_templates(comp_type: int, attrs: dict) -> list[tuple]:
     return []
 
 
-def _setbrush_buttoncolours(*, pressed: bool, sta: int,
+def _setbrush_buttoncolours(*, pressed: bool, sta: int, style: int = 0,
                              inline_spax_spay: bool = False) -> tuple:
     """Helper: button's setbrush uses pco2/picc2 when pressed,
     pco/picc when released.
+
+    Note that ``picc2``/``picc`` actually aliases ``bco2/bco`` (sta=1)
+    or ``pic2/pic`` (sta=2) — they all share the same binattinf
+    record because their per-attribute ``attpos`` collapses onto +6
+    (or +8) for the GuiObjButton/Button_T layout. So we always emit
+    LOAD(``picc`` / ``picc2``); the runtime resolves to whichever
+    visual mode is active.
 
     When ``inline_spax_spay`` is True, spax and spay are emitted as
     ASCII decimal literals instead of LOAD operands.  Required for
     button (98) and button_t (53) whose spax/spay have ``attposup == -1``
     in the editor's attribute schema.  pw is also -1 for these types,
     so it is always emitted as a literal ``'0'`` here.
+
+    ``style`` controls the setbrush trailing (arg 14):
+      * sta=1, style=4 → trailing="1" (the style=4 case adds a draw3d
+        bevel; the editor still emits trailing=1 even though it is
+        unused by the render path for this style — verified against
+        the b0 / b0_t blocks in 17_more_components/17.tft).
+      * Otherwise → trailing="0".
     """
     color_pair = ('pco2', 'picc2') if pressed else ('pco', 'picc')
-    if sta == 1:
-        # border-mode uses bco/bco2 instead of picc/picc2
-        color_pair = (color_pair[0], 'bco2' if pressed else 'bco')
-    elif sta == 2:
-        # pic mode uses pic2/pic
-        color_pair = (color_pair[0], 'pic2' if pressed else 'pic')
+    # picc/picc2 aliases bco/bco2/pic/pic2 — all share +6/+8 in
+    # GuiObjButton's attribute layout, so a single LOAD(picc)/LOAD(picc2)
+    # is correct regardless of sta. (See attrs-raw.txt and the LOAD
+    # operand decoding in `17_more_components/17.tft` b0 / b0_t.)
     spax_arg = ('inline_attr', 'spax') if inline_spax_spay else ('attr', 'spax')
     spay_arg = ('inline_attr', 'spay') if inline_spax_spay else ('attr', 'spay')
+    trailing = '1' if (sta == 1 and style == 4) else '0'
     return ('setbrush', [
         ('coord', 'x'), ('lit', ','),
         ('coord', 'y'), ('lit', ','),
@@ -457,7 +492,7 @@ def _setbrush_buttoncolours(*, pressed: bool, sta: int,
         spax_arg, ('lit', ','),
         spay_arg, ('lit', ','),
         ('lit', '0'), ('lit', ','),
-        ('lit', '0'),
+        ('lit', trailing),
     ])
 
 
@@ -564,28 +599,84 @@ def _emit_line(line: tuple, x, y, w, h, comp_id, page_id, attrs, attr_addr) -> b
 
 # -- Button/Button_T control-flow encoder ---------------------------
 
+def _draw3d_button_bevel(*, pressed: bool) -> tuple:
+    """Style=4 button draw3d bevel.
+
+    The editor emits a `draw3d x,y,w,h,<lightc>,<darkc>,1` block. The
+    colour pair flips between pressed and released:
+
+      * pressed  → (0x4228, 0xe71c) = (16936, 59164)
+      * released → (0xe71c, 0x4228) = (59164, 16936)
+
+    Both are emitted as 5-byte long-form literals (because 16936 >999
+    so doesn't fit inline-ASCII).
+
+    Verified against `17_more_components/17.tft`:
+      * b0 (Button) pressed draw3d  @ 0x81892 (after block [1] / [2])
+      * b0 (Button) released draw3d @ 0x81923
+      * b0_t (Button_T) draw3d blocks at the parallel offsets.
+    """
+    if pressed:
+        c1, c2 = 16936, 59164
+    else:
+        c1, c2 = 59164, 16936
+    return ('draw3d', [
+        ('coord', 'x'), ('lit', ','),
+        ('coord', 'y'), ('lit', ','),
+        ('coord', 'w'), ('lit', ','),
+        ('coord', 'h'), ('lit', ','),
+        ('long', c1), ('lit', ','),
+        ('long', c2), ('lit', ','),
+        ('lit', '1'),
+    ])
+
+
 def _encode_button_init(
     comp: "Component",
     attr_addr: Callable[[str], int],
 ) -> bytes:
     """Encode the button/button_t Ref event using if/else control flow.
 
-    Emits:
-        if(val==1) { setbrush_pressed } else { setbrush_released }
-        zstr_txt
+    Emits, for sta=1 / style=4 (the only fixture-verified combo):
+
+        if(val==1) {
+          setbrush_pressed; zstr; draw3d_pressed   # blocks [1..3]
+        } else {
+          setbrush_released; zstr; draw3d_released # blocks [5..7]
+        }
+
+    The compiled cglist is::
+
+        [0] cjmp(val == 1, FAIL ⇒ skip past pressed branch)
+        [1] setbrush(pressed colours)
+        [2] zstr(32767×4, txt)
+        [3] draw3d(pressed bevel colours)         # only if style=4
+        [4] jmp(skip past released branch)
+        [5] setbrush(released colours)
+        [6] zstr(32767×4, txt)
+        [7] draw3d(released bevel colours)        # only if style=4
+
+    Key shape details (verified byte-identical against
+    `17_more_components/17.tft` b0 page 2 and b0_t page 3):
+
+      * The comparator is the **un-negated** `==` (endid 1). cjmp's
+        VM semantics are "jump on FAIL" (see
+        `findings/script-control-flow.md`), so `cjmp(val==1)` falls
+        through into the pressed branch and jumps to the released
+        branch on failure.
+      * Each branch carries its own zstr (and optionally draw3d).
+        Earlier docs implied a single trailing zstr outside the
+        if-else; that's incorrect for the F-series init bytecode.
+      * draw3d only appears for `sta=1, style=4` (the bevel border
+        style); for other styles, it is omitted.
 
     This bypasses the normal ``_emit_line`` path because the if/else
     structure requires ``script_compiler_extras`` to emit cjmp/jmp
     opcodes and patch byte-distance targets.
-
-    The cglist layout is:
-        [0] cjmp(val != 1, jump 2 entries → past pressed body + jmp)
-        [1] setbrush_pressed body
-        [2] jmp(1 entry → past released body)
-        [3] setbrush_released body
-        [4] zstr_txt body
     """
     sta = int(comp.attrs.get('sta', 0))
+    style = int(comp.attrs.get('style', 0))
+    has_draw3d = (sta == 1 and style == 4)
     x, y, w, h = comp.x, comp.y, comp.w, comp.h
     page_id, comp_id = comp.page_id, comp.comp_id
     attrs = comp.attrs
@@ -593,22 +684,42 @@ def _encode_button_init(
     def emit(line: tuple) -> bytes:
         return _emit_line(line, x, y, w, h, comp_id, page_id, attrs, attr_addr)
 
-    # Build the three body blocks.
-    pressed_body = emit(_setbrush_buttoncolours(pressed=True, sta=sta, inline_spax_spay=True))
-    released_body = emit(_setbrush_buttoncolours(pressed=False, sta=sta, inline_spax_spay=True))
+    pressed_set = emit(_setbrush_buttoncolours(
+        pressed=True, sta=sta, style=style, inline_spax_spay=True))
+    released_set = emit(_setbrush_buttoncolours(
+        pressed=False, sta=sta, style=style, inline_spax_spay=True))
     zstr_body = emit(_zstr_txt())
+    pressed_d3d = emit(_draw3d_button_bevel(pressed=True)) if has_draw3d else None
+    released_d3d = emit(_draw3d_button_bevel(pressed=False)) if has_draw3d else None
 
-    # Build the cjmp: if(val == 1) → negated to cjmp(val != 1, skip pressed body + jmp)
-    # The branch target is entry-distance = 2 (skip entries [1] and [2]).
+    # cjmp: if(val == 1) — un-negated. cjmp jumps when condition
+    # FAILS, so the fall-through path is the pressed branch.
     lhs = _load_op(attr_addr("val"))
     rhs = b"1"
-    endid_neq = COMPARATOR_ENDID["!="]   # 6 — negation of == for if(val==1)
-    cjmp_body = emit_cjmp(lhs, rhs, endid_neq, placeholder_int=2)
+    endid_eq = COMPARATOR_ENDID["=="]  # 1
 
-    # jmp to skip the released body (entry-distance = 1).
-    jmp_body = emit_jmp(1)
+    # Build cglist. Entry-distance placeholders:
+    #   cjmp ⇒ skip past pressed branch (3 or 4 entries: set, zstr,
+    #          [d3d], jmp).
+    #   jmp  ⇒ skip past released branch (2 or 3 entries: set, zstr,
+    #          [d3d]).
+    pressed_entries = [pressed_set, zstr_body]
+    if pressed_d3d is not None:
+        pressed_entries.append(pressed_d3d)
+    released_entries = [released_set, zstr_body if released_d3d is None
+                        else zstr_body]
+    if released_d3d is not None:
+        released_entries = [released_set, zstr_body, released_d3d]
 
-    cglist: list[bytes] = [cjmp_body, pressed_body, jmp_body, released_body, zstr_body]
+    cjmp_skip = len(pressed_entries) + 1  # +1 for the jmp entry
+    jmp_skip = len(released_entries)
+
+    cjmp_body = emit_cjmp(lhs, rhs, endid_eq, placeholder_int=cjmp_skip)
+    jmp_body = emit_jmp(jmp_skip)
+
+    cglist: list[bytes] = (
+        [cjmp_body] + pressed_entries + [jmp_body] + released_entries
+    )
 
     # Stage 2: convert entry distances to byte distances.
     cjmp_template = cjmp_body[:3]
@@ -799,6 +910,270 @@ def _self_test_page():
     return True
 
 
+def _self_test_text_full():
+    """Verify the FULL Text component init block (setbrush + zstr)
+    round-trips byte-identically against `17_more_components/17.tft`
+    t0 @ file offset 0x806dd (init_off=0x6dd, strdata=0x80000).
+
+    Block sequence (from the fixture):
+      [0] setbrush x,y,w,h, font, pco, bco, xcen, ycen, 1, isbr,
+                   spax_inline, spay_inline, pw, 0
+      [1] zstr <long 32767>×4, txt
+
+    LOAD addresses are taken from the fixture's binattinf table; in
+    real use, ``attr_addr`` would resolve these from the per-page
+    attribute layout (see ``tft_attrs_encoder.py``).
+    """
+    observed_addrs = {
+        'font': 457, 'pco': 459, 'bco': 458,
+        'xcen': 460, 'ycen': 461,
+        'isbr': 465, 'pw': 462, 'txt': 463,
+    }
+    def addr(name: str) -> int:
+        if name not in observed_addrs:
+            raise KeyError(f"unexpected attr_addr({name!r})")
+        return observed_addrs[name]
+
+    comp = Component(
+        comp_type=116, comp_id=11, page_id=0,
+        x=0, y=69, w=160, h=31,
+        attrs={'sta': 1, 'style': 4, 'spax': 0, 'spay': 0},
+    )
+
+    expected_b0 = bytes.fromhex(
+        "091d08302c36392c3136302c33312c01c90100002c01cb0100002c01ca0100002c"
+        "01cc0100002c01cd0100002c312c01d10100002c302c302c01ce0100002c30"
+    )
+    expected_b1 = bytes.fromhex(
+        "09170403ff7f00002c03ff7f00002c03ff7f00002c03ff7f00002c01cf010000"
+    )
+    expected = (
+        struct.pack("<I", len(expected_b0)) + expected_b0
+        + struct.pack("<I", len(expected_b1)) + expected_b1
+    )
+
+    blob = encode_init_block(comp, addr)
+    if blob != expected:
+        print("TEXT FULL MISMATCH")
+        print(f"  got:      {blob.hex()}")
+        print(f"  expected: {expected.hex()}")
+        return False
+    print("OK: Text (0,69,160,31) sta=1 full setbrush+zstr round-trips byte-for-byte")
+    return True
+
+
+def _self_test_button():
+    """Verify the FULL Button component init block (cjmp+pressed branch
+    +jmp+released branch, each with setbrush/zstr/draw3d for style=4)
+    round-trips byte-identically against `17_more_components/17.tft`
+    b0 page 2 @ file offset 0x81814 (init_off=0x1814).
+
+    Button schema (F-series): sta=1, style=4 → bevel border with
+    draw3d. The cjmp uses un-negated `==` (endid 1), so the
+    fall-through path renders the pressed state.
+    """
+    # LOAD record indices from the fixture (per-component base = 1260
+    # plus the refallatt offset for each attr).
+    observed_addrs = {
+        'font': 1264,
+        'picc':  1265,  # aliased: pic/picc/bco share +6 → one record
+        'picc2': 1266,  # aliased: pic2/picc2/bco2 share +8 → one record
+        'pco':   1267,
+        'pco2':  1268,
+        'xcen':  1269,
+        'ycen':  1270,
+        'val':   1271,
+        'txt':   1272,
+        'isbr':  1274,
+    }
+    def addr(name: str) -> int:
+        if name not in observed_addrs:
+            raise KeyError(f"unexpected attr_addr({name!r})")
+        return observed_addrs[name]
+
+    comp = Component(
+        comp_type=98, comp_id=4, page_id=2,
+        x=52, y=233, w=100, h=50,
+        attrs={'sta': 1, 'style': 4, 'spax': 0, 'spay': 0},
+    )
+
+    # Concatenated expected blocks from the fixture dump (8 blocks).
+    expected_blocks_hex = [
+        "09000401f70400002c312c312c0393000000",
+        "091d0835322c3233332c3130302c35302c01f00400002c01f40400002c01f20400002c"
+        "01f50400002c01f60400002c312c01fa0400002c302c302c302c31",
+        "09170403ff7f00002c03ff7f00002c03ff7f00002c03ff7f00002c01f8040000",
+        "09070835322c3233332c3130302c35302c03284200002c031ce700002c31",
+        "54200388000000",
+        "091d0835322c3233332c3130302c35302c01f00400002c01f30400002c01f10400002c"
+        "01f50400002c01f60400002c312c01fa0400002c302c302c302c31",
+        "09170403ff7f00002c03ff7f00002c03ff7f00002c03ff7f00002c01f8040000",
+        "09070835322c3233332c3130302c35302c031ce700002c03284200002c31",
+    ]
+    expected = b""
+    for h in expected_blocks_hex:
+        body = bytes.fromhex(h)
+        expected += struct.pack("<I", len(body)) + body
+
+    blob = encode_init_block(comp, addr)
+    if blob != expected:
+        print("BUTTON MISMATCH")
+        print(f"  got:      {blob.hex()}")
+        print(f"  expected: {expected.hex()}")
+        # Block-by-block diff
+        gb = disassemble_blocks_to_lines(blob)
+        eb = disassemble_blocks_to_lines(expected)
+        for i in range(max(len(gb), len(eb))):
+            g = gb[i][1].hex() if i < len(gb) else "(missing)"
+            e = eb[i][1].hex() if i < len(eb) else "(missing)"
+            mark = "  " if g == e else "!!"
+            print(f"  {mark}[{i}] got={g}")
+            print(f"  {mark}    exp={e}")
+        return False
+    print("OK: Button (52,233,100,50) sta=1 style=4 full cjmp+pressed+jmp+released "
+          "round-trips byte-for-byte")
+    return True
+
+
+def _self_test_button_t():
+    """Same shape as ``_self_test_button`` but for the Button_T
+    (DualStateButton, lei 53) instance b0 on page 3 of
+    `17_more_components/17.tft` (file offset 0x81d71).
+
+    Button_T's per-component attribute layout is identical to
+    GuiObjButton's, so the encoder uses the same code path. This
+    test exists to confirm parity across both lei codes.
+    """
+    observed_addrs = {
+        'font': 1564,        # 0x61c
+        'picc':  1565,       # 0x61d
+        'picc2': 1566,       # 0x61e
+        'pco':   1567,       # 0x61f
+        'pco2':  1568,       # 0x620
+        'xcen':  1569,       # 0x621
+        'ycen':  1570,       # 0x622
+        'val':   1571,       # 0x623
+        'txt':   1572,       # 0x624
+        'isbr':  1574,       # 0x626
+    }
+    def addr(name: str) -> int:
+        if name not in observed_addrs:
+            raise KeyError(f"unexpected attr_addr({name!r})")
+        return observed_addrs[name]
+
+    comp = Component(
+        comp_type=53, comp_id=7, page_id=3,
+        x=409, y=161, w=60, h=60,
+        attrs={'sta': 1, 'style': 4, 'spax': 0, 'spay': 0},
+    )
+
+    expected_blocks_hex = [
+        "09000401230600002c312c312c0393000000",
+        "091d083430392c3136312c36302c36302c011c0600002c01200600002c011e0600002c"
+        "01210600002c01220600002c312c01260600002c302c302c302c31",
+        "09170403ff7f00002c03ff7f00002c03ff7f00002c03ff7f00002c0124060000",
+        "0907083430392c3136312c36302c36302c03284200002c031ce700002c31",
+        "54200388000000",
+        "091d083430392c3136312c36302c36302c011c0600002c011f0600002c011d0600002c"
+        "01210600002c01220600002c312c01260600002c302c302c302c31",
+        "09170403ff7f00002c03ff7f00002c03ff7f00002c03ff7f00002c0124060000",
+        "0907083430392c3136312c36302c36302c031ce700002c03284200002c31",
+    ]
+    expected = b""
+    for h in expected_blocks_hex:
+        body = bytes.fromhex(h)
+        expected += struct.pack("<I", len(body)) + body
+
+    blob = encode_init_block(comp, addr)
+    if blob != expected:
+        print("BUTTON_T MISMATCH")
+        print(f"  got:      {blob.hex()}")
+        print(f"  expected: {expected.hex()}")
+        gb = disassemble_blocks_to_lines(blob)
+        eb = disassemble_blocks_to_lines(expected)
+        for i in range(max(len(gb), len(eb))):
+            g = gb[i][1].hex() if i < len(gb) else "(missing)"
+            e = eb[i][1].hex() if i < len(eb) else "(missing)"
+            mark = "  " if g == e else "!!"
+            print(f"  {mark}[{i}] got={g}")
+            print(f"  {mark}    exp={e}")
+        return False
+    print("OK: Button_T (409,161,60,60) sta=1 style=4 full init "
+          "round-trips byte-for-byte")
+    return True
+
+
+def _self_test_gtext():
+    """Verify the GText (ScrollingText, lei 55) setbrush + zstr blocks
+    round-trip byte-identically against `17_more_components/17.tft`
+    g0 page 3 @ file offset 0x81b48 (init_off=0x1b48).
+
+    GText differs from Text in two ways:
+      * spax / spay are stored in RAM (attposup positive in F-series
+        → LOAD operands, not inline ASCII).
+      * The zstr's first 4 args are vvs0/vvs1/vvs2/vvs3 (also LOADs)
+        rather than the literal 32767 bounds Text uses.
+
+    The full fixture init contains two additional blocks (a scroll-init
+    `09 24 08` block and a `4c 20 03` motion handler jmp) that are
+    part of GText's secondary event chain, not the Ref event. Those
+    are out of scope for this encoder.
+    """
+    observed_addrs = {
+        'font': 1395,        # 0x573
+        'bco':  1396,        # 0x574 (alias picc/pic at +6)
+        'pco':  1397,        # 0x575
+        'xcen': 1398,        # 0x576
+        'ycen': 1399,        # 0x577
+        'isbr': 1406,        # 0x57e
+        'spax': 1407,        # 0x57f (RAM-backed for GText)
+        'spay': 1408,        # 0x580 (RAM-backed for GText)
+        'vvs0': 1409,        # 0x581
+        'vvs1': 1410,        # 0x582
+        'vvs2': 1411,        # 0x583
+        'vvs3': 1412,        # 0x584
+        'txt':  1404,        # 0x57c
+    }
+    def addr(name: str) -> int:
+        if name not in observed_addrs:
+            raise KeyError(f"unexpected attr_addr({name!r})")
+        return observed_addrs[name]
+
+    comp = Component(
+        comp_type=55, comp_id=2, page_id=3,
+        x=188, y=21, w=240, h=30,
+        attrs={'sta': 1, 'style': 4},
+    )
+    blob = encode_init_block(comp, addr)
+    # Take only the first two blocks (setbrush + zstr).
+    blocks = disassemble_blocks_to_lines(blob)
+    if len(blocks) < 2:
+        print(f"GTEXT MISMATCH: expected ≥2 blocks, got {len(blocks)}")
+        return False
+    sb = blocks[0][1]
+    zs = blocks[1][1]
+
+    expected_sb = bytes.fromhex(
+        "091d083138382c32312c3234302c33302c01730500002c01750500002c01740500002c"
+        "01760500002c01770500002c312c017e0500002c017f0500002c01800500002c302c30"
+    )
+    expected_zs = bytes.fromhex(
+        "09170401810500002c01820500002c01830500002c01840500002c017c050000"
+    )
+    if sb != expected_sb:
+        print("GTEXT SETBRUSH MISMATCH")
+        print(f"  got:      {sb.hex()}")
+        print(f"  expected: {expected_sb.hex()}")
+        return False
+    if zs != expected_zs:
+        print("GTEXT ZSTR MISMATCH")
+        print(f"  got:      {zs.hex()}")
+        print(f"  expected: {expected_zs.hex()}")
+        return False
+    print("OK: GText (188,21,240,30) sta=1 setbrush+zstr round-trips byte-for-byte")
+    return True
+
+
 def _self_test_text():
     """Verify a Text component's setbrush block emits spax/spay as
     ASCII literals (inline_attr), not as LOAD operands.
@@ -861,5 +1236,9 @@ if __name__ == "__main__":
     ok = _self_test_picture() and ok
     ok = _self_test_page() and ok
     ok = _self_test_text() and ok
+    ok = _self_test_text_full() and ok
+    ok = _self_test_button() and ok
+    ok = _self_test_button_t() and ok
+    ok = _self_test_gtext() and ok
     if not ok:
         import sys; sys.exit(1)
