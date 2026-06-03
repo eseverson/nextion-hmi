@@ -27,16 +27,28 @@ allocator-driven resolution, and a 4-way elif cascade.
 
 **What's left**:
 
-- **`ATTPOSUP_TABLE` coverage**:
-  [`scripts/lib/memory_allocator.py`](../scripts/lib/memory_allocator.py)'s
-  table only includes XFloat (lei 59) and Vari (lei 52). Extending it
-  to Text / Button / Slider / Page / Hotspot / etc. requires either
-  more byte-verified fixtures or pulling the per-type `attposup`
-  values from `hmitype.dll` IL (the same table that powers
-  [`attribute-records.md`](attribute-records.md)'s per-class layout
-  for binattinf records — but those are TFT-side offsets, not the
-  public-memory offsets the script compiler needs; the two tables
-  are related but distinct).
+- **`ATTPOSUP_TABLE` coverage**: [`scripts/lib/memory_allocator.py`](../scripts/lib/memory_allocator.py)
+  now exposes two parallel tables — `ATTPOSUP_TABLE` (T0 path, used by
+  the 16_loop self-test) and `ATTPOSUP_TABLE_T1` (F-series path, used
+  by NX*F* displays like the miata-dash). The F-series table covers 19
+  component types (LEIs 0, 1, 5, 51, 52, 53, 55, 56, 57, 58, 59, 98,
+  106, 109, 112, 113, 116, 121, 122) — Curve, Slider, Touchcap, Timer,
+  Vari, Button_T, GText, CheckBox, Radio, Qrcode, XFloat, Button,
+  Prog, Hotspot, Pic, Picc, Text, Page, Zhizhen. All entries were
+  extracted from the second branch (``function_objdataraminmemory != 1``,
+  which is the F-series path per
+  [`text-setbrush-variant.md`](text-setbrush-variant.md)) of each
+  `GuiObj<Kind>.GetAtts_WithNoHead` method in the decompiled
+  `hmitype.dll` IL.
+  - **Byte-verified**: T0 XFloat (val=+5) and Vari (val=+0) only.
+  - **IL-only (unverified against a byte-decoded F-series fixture)**:
+    all entries in `ATTPOSUP_TABLE_T1`. The Slider entry (val=+10)
+    cross-matches the `0x44a + 10 = 0x454` reference in
+    [`memory-allocation.md`](memory-allocation.md) § "Worked example",
+    so it has indirect support but isn't end-to-end byte-checked
+    through the allocator yet. A round-trip fixture (e.g.
+    `17_more_components`) should be used to byte-verify the F-series
+    block layout before relying on the table for emit-side authoring.
 - **Widen the round-trip corpus.** Current byte-verified pairs come
   from `16_loop` (if-else and while). The miata-dash Timer event
   source (in `nextion/work/hmi_text/main.txt`) and Hotspot Touch-Press
@@ -52,24 +64,53 @@ allocator-driven resolution, and a 4-way elif cascade.
 
 ## 2. Finish the per-component init-bytecode encoder
 
-**Where it stands**:
+**Where it stands** (updated 2026-05-18):
 [`scripts/lib/tft_init_encoder.py`](../scripts/lib/tft_init_encoder.py)
-round-trips XFloat / QRCode / Picture / Page. Text setbrush
-sub-variant dispatch is decoded
-([`text-setbrush-variant.md`](text-setbrush-variant.md)).
+round-trips XFloat / QRCode / Picture / Page / **Text / Button /
+Button_T / GText** byte-identically against
+`17_more_components/17.tft` (see
+[`init-bytecode-encoder.md`](init-bytecode-encoder.md#byte-identical-round-trip-coverage-2026-05-18)
+for the full table of verified blocks).
+
+The Text setbrush `attposup == -1` rule
+([`text-setbrush-variant.md`](text-setbrush-variant.md)) is wired
+in. The Button/Button_T if-else control flow uses the un-negated
+`==` comparator (per `script-control-flow.md` VM semantics) and
+emits draw3d bevel blocks for `sta=1, style=4`.
+
+Variable-length attribute storage is implemented in
+[`scripts/lib/tft_attrs_encoder.py`](../scripts/lib/tft_attrs_encoder.py)
+as `LongAttrAllocator`: long Sstr (>4 bytes), `molloc` (curve
+buffers), and `binary` blobs now flow through a two-pass allocator
+that mirrors `appbianyi.StructHtoL`. The Sstr / Strlenth record pair
+is patched automatically when `build_component_records` is given an
+`allocator=`.
 
 **What's left**:
 
-- Apply the per-type `attposup == -1` rule to Text / Button / Button_T
-  emission inside `tft_init_encoder.py`. Full per-type attribute list
-  with `attposup` values lives in
-  [`attribute-records.md`](attribute-records.md).
-- Button-family templates use `if (val==1) {…} else {…}` — needs the
-  integrated script compiler from item 1.
-- Variable-length attribute storage (strings, picture data, curve
-  buffers) — allocator mapped in
-  [`memory-allocation.md`](memory-allocation.md); implement the
-  `Sstr` / `molloc` / `binary` allocation paths.
+- **Other types with if-else templates** — Checkbox (lei 56), Radio
+  (57), Prog (106 dir=0 already, other dirs not yet) use sysvar
+  scratch (`sya0 = '&w&' / 4`) plus an inner `if(val==1){…}` body.
+  The script-bytecode compiler can already emit those source lines;
+  hooking them into the init encoder is mechanical once a byte-verified
+  fixture exists.
+- **`style != 4` button paths** — the encoder currently emits the
+  setbrush trailing as literal `'1'` only for `sta=1, style=4`. For
+  `style ∈ {1,2,3}` the trailing should be `LOAD(borderw)`. No fixture
+  in `17_more_components` exercises this; need a `style=1/2/3` button
+  save to verify.
+- **GText secondary blocks (`09 24 08` scroll-init, `4c 20 03`
+  motion-jmp)** — the Ref event's setbrush + zstr blocks are
+  byte-identical, but the two trailing blocks (which arm the scrolling
+  motion handler) are not yet emitted. These are not part of the Ref
+  event proper — they belong to the slide event chain.
+- **Allocator integration with the page-level writer** — the
+  `LongAttrAllocator` materialises the byte image of the long-string
+  region but the caller still needs to wire its output into the
+  per-page private memory section (see
+  [`memory-allocation.md`](memory-allocation.md) "Per-page private
+  allocator"). A future fixture exercising a long-`txt` Text on a
+  real save will confirm the offset coordinate system byte-for-byte.
 
 ## 3. Attribute-record encoder — minor follow-ups
 
@@ -89,15 +130,29 @@ The core encoder is done (round-trips 1679/1679 records in
   [`attribute-records.md`](attribute-records.md#whats-not-yet-figured-out),
   item 2).
 
-## 4. `appinf1` body-driven derivation
+## 4. `appinf1` body-driven derivation — done
 
-`pack_appinf1` in
-[`scripts/lib/tft_attrs.py`](../scripts/lib/tft_attrs.py) re-packs the
-structured `appinf1` from a `fields` dict. What's still missing is a
-helper `compute_appinf1(body_layout) -> dict` that *derives* every
-address/count field from observed body section sizes (pages,
-components, pictures, fonts, etc.). Mechanical; not blocking the
-add-component tools (they update fields incrementally).
+`compute_appinf1(body: BodyDescription) -> ComputedAppinf1` in
+[`scripts/lib/compute_appinf1.py`](../scripts/lib/compute_appinf1.py)
+derives every offset/count field from a high-level `BodyDescription`
+(picture descriptors, font block sizes, page/obj counts, init-bytecode
+size, AppAllvas count, total attribute-record bytes) and returns both
+the structured field dict and the 196-byte encrypted H2 ready to write
+at file offset 0xC8. Verified byte-identical for all 5 fixtures
+(`16_loop`, `17_more_components`, `15_picture`, `11_add_page`,
+`01_orientation_flip`) via the round-trip in
+`scripts/research/compute_appinf1.py`.
+
+**Caveats** (would benefit from a fixture):
+
+- `gmovxinxiadd` / `videoxinxiadd` / `wavxinxiadd` are emitted as `0`
+  when their respective `qty == 0` (matches every observed fixture).
+  When populated their byte layout inside the resources region is
+  unverified; we don't have a fixture exercising any of them yet.
+- `picxinxi_offset_in_resources` is treated as caller-supplied — in
+  every fixture it's the constant `0x48b5d`, but that value is a
+  property of the bootloader/driver/font composition of the resources
+  blob, not derivable from project content alone.
 
 ## 5. `main.HMI` writer
 
@@ -133,46 +188,32 @@ project-content-driven.
 
 ## Last blocker for the miata-dash speed-gauge use case
 
-The firmware writes `x9.val=…` over UART. The string `x9` doesn't
-appear anywhere in the **TFT** bytes — searched ASCII, UTF-16LE/BE,
-length-prefixed, and `crc32_bytewise(name)` hash; no hits. But the
-**HMI side does** store the objname as an inline string of up to 14
-bytes (typebyte `0x1e` in the per-component attribute record — see
-[`format-hmi.md`](format-hmi.md#attribute-record-format-inside-a-component-hmi-side)).
-So when a project compiles HMI → TFT the editor either:
+**Mechanism resolved** — names are stored as `crc32_bytewise(0xffffffff,
+name)` u32 hashes in a sorted `(u32 hash, u16 ordinal)` table in
+strdata. Cracked using `/tmp/14_char_name.tft`: the 14-char custom
+hotspot name hashes to `0x689a44ff`, present exactly once in the TFT
+at strdata-relative `0x11a0`. Full details in
+[`component-name-hashes.md`](component-name-hashes.md).
 
-- (a) strips/transforms names into a form we haven't decoded yet;
-- (b) embeds them at a position we haven't looked at; or
-- (c) derives names at runtime from `(type_prefix, position-of-
-      component-of-that-type-on-page)` and the HMI-side string is
-      editor-only metadata.
+**Still open for the speed-gauge case specifically**:
+miata-dash's TFT has *no* component-name hash table — only the 4-entry
+"well-known" table at strdata+0x34 (same in every TFT). Two
+possibilities, in order of likelihood:
 
-Hypothesis (c) is still most plausible. We *did* find one parallel
-mechanism — `AppAllvas` at `strdataaddr + AppAllvasAddr` — that hashes
-global scalar names (`sys0`/`sys1`/`sys2`) via `crc32_bytewise` and
-maps them to byte offsets. Component-name resolution would be the
-analogous structure for `<name>.<attr>` access, but we haven't seen
-it. See [`format-tft.md`](format-tft.md#appallvas--global-scalar-name-table).
+- (a) **Position-derived names**: miata-dash's components were never
+  renamed in the editor, so no hash table was emitted; firmware
+  resolves `x9` from `(type_prefix, ordinal-among-same-type)`.
+- (b) The hash table exists but has a different shape when no custom
+  names are present.
 
-### Available test paths
+### Test path
 
-- [`add_hotspot.py`](../scripts/tools/add_hotspot.py) produces the
-  canonical 511-byte Hotspot template (`objname` typebyte `0x1e`,
-  14-byte inline name) byte-identical to editor saves.
-  `add_hotspot.py source.HMI -o new.HMI --name x9` followed by
-  editor-compile and flash tests whether the firmware's `x9.val=…`
-  writes land. If they do, names ARE addressable directly by their
-  HMI string — and the question shifts to "where are they encoded in
-  the TFT".
-- [`add_xfloat_tft.py`](../scripts/tools/add_xfloat_tft.py) bypasses
-  the editor and inserts an XFloat that is the 10th XFloat on page 0
-  of miata-dash. Flash and check whether `x9.val=…` writes land — if
-  yes, hypothesis (c) is confirmed; if not, names ARE in the TFT and
-  we need to find where.
-
-If neither works, capture an editor-rename fixture (e.g. `x0` →
-`xspeed`) save, then diff TFT bytes against the original — the
-changed bytes are the name encoding.
+Flash [`add_xfloat_tft.py`](../scripts/tools/add_xfloat_tft.py)'s
+output (`/tmp/miata_with_xfloat.tft`, the 10th XFloat on page 0). If
+`x9.val=…` writes land, hypothesis (a) is confirmed and no hash
+authoring is needed. If not, we know we must emit a hash entry —
+mechanics are now documented and would be added to the add-component
+tools next.
 
 ## Recommended order of attack
 

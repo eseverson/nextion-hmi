@@ -266,6 +266,60 @@ bytecode rather than a fixed-stride record. Recovering them requires
 the disassembler in [`format-bytecode.md`](format-bytecode.md) and is
 still partial.
 
+## Body layout — how each `appinf1` address is derived
+
+Verified against every fixture in `tests/editor outputs/_old/`:
+
+```
+# Resources region (absolute file offsets)
+resourcesfileddr            = 0x10000                       # constant
+strdataaddr                 = resourcesfileddr + resources_size
+                                                            # in observed
+                                                            # fixtures
+                                                            # resources_size
+                                                            # is 0x60000 or
+                                                            # 0x70000
+picxinxiadd                 = resourcesfileddr + 0x48b5d    # so 0x58b5d
+                                                            # in every
+                                                            # observed
+                                                            # fixture
+zimoxinxiadd                = picxinxiadd
+                              + 24 * picqyt                  # Picturexinxi rows
+                              + Σ picture.data_size          # pixel blocks
+gmovxinxiadd                = 0 when gmovqyt  == 0
+videoxinxiadd               = 0 when videoqyt == 0
+wavxinxiadd                 = 0 when wavqyt   == 0
+
+# strdata region (offsets relative to strdataaddr unless suffixed _abs)
+staticstrBeg                = sizeof(init_bytecode_region)   # 0..N
+AppAllvasAddr               = staticstrBeg                   # always equal
+attdataaddr                 = AppAllvasAddr + 12 * AppAllvasQty
+
+# Trailing tables (absolute file offsets)
+pageadd                     = strdataaddr
+                              + attdataaddr
+                              + Σ per_page_binattinf_bytes
+objxinxiadd                 = pageadd + 16 * pageqyt
+end_of_body                 = objxinxiadd + 232 * objqyt
+trailing_crc_offset         = file_size - 4
+```
+
+`Σ per_page_binattinf_bytes` is each page's
+`pagexinxi.attdataaddr` table contribution — 24 × `n_records` —
+concatenated end-to-end. (See [`attribute-records.md`](attribute-records.md)
+for how `n_records` is derived per page.)
+
+The constant `0x48b5d` for `picxinxi_offset_in_resources` is a property
+of the editor's stock resources blob (bootloader + drivers + the
+GB2312 font index + the fixed picture data area). It isn't derivable
+from project content alone, so a from-scratch writer treats it as a
+caller-supplied constant.
+
+`AppAllvasAddr == staticstrBeg` was unexpected and isn't called out in
+the spec but holds in every fixture: the editor emits the AppAllvas
+table immediately at the start of the static-data section, with no
+gap.
+
 ## TFTTool limitations on F-series
 
 TFTTool can read T0/K0 TFTs losslessly but breaks F-series:

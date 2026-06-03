@@ -326,8 +326,7 @@ opcode → mnemonic for the init-bytecode bodies we see in
 | `09 0a 04`   | `xpic` (cropped-picture draw)                  |
 | `09 01 04`   | `pic` (full-picture draw)                      |
 | `09 08 08`   | `qrcode` (8-arg)                               |
-| `09 15 04`   | `zstr` (5-arg z-axis-bounded text draw)        |
-| `09 17 04`   | `addt` (XFloat / Gauge helper)                 |
+| `09 17 04`   | `zstr` (5-arg bounded text draw) / `addt` alias |
 | `09 04 04`   | `cir` (4-arg circle outline)                   |
 | `09 16 04`   | `cirs` (4-arg circle solid)                    |
 | `09 07 08`   | `draw3d` (4-arg + colour pair, 3D bevel)       |
@@ -347,6 +346,106 @@ component type observed in real projects. The encoder in
 takes that map as a parameter (via the `attr_addr` callable) and
 needs no other inputs.
 
+### Byte-identical round-trip coverage (2026-05-18)
+
+The encoder's self-tests now verify the following components round-trip
+byte-for-byte against `tests/editor outputs/_old/17_more_components/17.tft`:
+
+| Test                   | Component | Fixture obj / file offset           | Blocks |
+|------------------------|-----------|--------------------------------------|--------|
+| `_self_test`           | XFloat    | obj 1 page 0 @ `0x800e2`             | setbrush + fstr |
+| `_self_test_qrcode`    | QRCode    | obj 50 page 3 @ `0x81f7a`            | qrcode |
+| `_self_test_picture`   | Picture   | obj 39 page 2 @ `0x817ed`            | pic |
+| `_self_test_page`      | Page      | every page @ `pageadd + 0x4`         | fill |
+| `_self_test_text_full` | Text      | t0 obj 11 page 0 @ `0x806dd`         | setbrush + zstr |
+| `_self_test_button`    | Button    | b0 obj 38 page 2 @ `0x81814`         | cjmp + 3 pressed + jmp + 3 released |
+| `_self_test_button_t`  | Button_T  | b0_t obj 47 page 3 @ `0x81d71`       | identical to Button |
+| `_self_test_gtext`     | GText     | g0 obj 42 page 3 @ `0x81b48`         | setbrush + zstr (Ref event only) |
+
+The Text setbrush emits spax/spay as inline ASCII (per
+[`text-setbrush-variant.md`](text-setbrush-variant.md)); GText emits
+them as LOAD operands because its F-series `attposup` for those is
+positive. Button / Button_T share GuiObjButton's attribute schema and
+emit identical block sequences; the encoder routes both through
+`_encode_button_init`.
+
+### Button / Button_T control flow (`sta=1, style=4`)
+
+The Ref-event template for buttons is:
+
+```
+if(val==1) { setbrush_pressed;  zstr 32767×4,txt;  draw3d <highlight,shadow>,1 }
+else      { setbrush_released; zstr 32767×4,txt;  draw3d <shadow,highlight>,1 }
+```
+
+Compiles to 8 cglist entries (cjmp / 3 pressed blocks / jmp / 3 released
+blocks). The cjmp uses the **un-negated** `==` comparator (endid 1) and
+relies on the VM's "jump on FAIL" semantics (see
+[`script-control-flow.md`](script-control-flow.md#vm-semantics-for-cjmp)).
+This contradicts the older draft template in §`button_t` above which
+suggested a single trailing zstr outside the if-else — the F-series
+init bytecode actually duplicates the zstr (and the optional draw3d
+bevel) inside each branch.
+
+The `draw3d` colour pair is fixed: pressed = (16936, 59164),
+released = (59164, 16936) — the order flips so the bevel shadow lands
+on the opposite edge. Both are emitted as 5-byte long-form integer
+literals (`03 LL LL LL LL`) because the decimal repr (>3 chars)
+exceeds the inline-ASCII budget.
+
+For `style != 4`, the draw3d blocks are omitted (the trailing setbrush
+arg also changes — `style ∈ {1,2,3}` carries `LOAD(borderw)` in arg
+14 instead of literal `'1'`; not yet exercised by a fixture).
+
+### `zstr` opcode in 1.67.1
+
+The init blocks in `17_more_components/17.tft` consistently use the
+3-byte opcode header `09 17 04` for `zstr <bound0..3>,<txt>`. The
+older `09 15 04` mapping from nxt-1.65.1's table is not seen in any
+1.67.1 fixture. The encoder uses `09 17 04` for both
+Text-with-literal-bounds and GText-with-VVS-bounds variants.
+
+### Long literals for `32767`
+
+Text's bounds (`32767`) and the button-bevel colour pair are emitted
+as 5-byte long-form integer literals (`03 ff 7f 00 00`), NOT as ASCII
+digits. The expression compiler in `bianyionline` switches to
+long-form whenever the decimal repr exceeds 3 characters (matches the
+`Strmake_StrToS32` threshold reverse-engineered for
+[`script_compiler_extras._emit_int_literal`](../scripts/lib/script_compiler_extras.py)).
+
+### Variable-length attribute storage (Sstr / molloc / binary)
+
+Implemented in
+[`scripts/lib/tft_attrs_encoder.py`](../scripts/lib/tft_attrs_encoder.py)
+as `LongAttrAllocator`. The two-pass layout mirrors
+`appbianyi.StructHtoL` (see
+[`memory-allocation.md`](memory-allocation.md)):
+
+1. **Pass 1 (init data — Sstr long strings).** Each Sstr value >4 bytes
+   gets queued; capacity = `len(value) + 1` (NUL terminator) rounded up
+   to 4. The string bytes are written contiguously into the page's
+   private memory region in queue order; each entry's offset is
+   recorded.
+
+2. **Pass 2 (dynamic — molloc, binary).** Each `molloc` curve buffer /
+   `binary` blob gets a region offset in the tail past the
+   initialised region, in queue order. Capacity is rounded up to 4.
+
+3. **Patch.** Linked records have their `attmemorypos` back-patched:
+   * Sstr / molloc / binary record → assigned **offset**.
+   * Paired `<name>_maxl` Strlenth record → allocated **capacity**.
+
+`build_component_records(..., allocator=...)` wires the queuing
+automatically: declared Sstr attributes with values >4 bytes are
+queued and their `<name>_maxl` Strlenth records are linked. Short
+Sstr values (≤4 bytes) continue to pack inline into the record's
+4-byte `attmemorypos` slot, no allocator needed.
+
+Self-test (`_self_test_long_attr_allocator`) covers a 15-byte string
+("Hello, Nextion!"), a Variable with a short 2-byte string (verifies
+inline path is still used), and a mixed molloc+binary scenario.
+
 **Still missing**:
 
 1. **Attribute-address resolution** (gap #1): the LOAD operand
@@ -362,12 +461,16 @@ needs no other inputs.
 3. **`Getatt_Codes` minor dispatch branches**:
    - The `borderw`-conditional inside sta=1: when `style ∈ {1,2,3}`
      the trailing arg is `'&borderw&'`, when `style ∈ {4}` it's
-     literal `"1"`. Implemented in the encoder.
-   - The full `if/else` rewriter for `button`/`button_t`/`checkbox`/
-     `radiobutton`: control-flow compilation depends on the
-     script-bytecode compiler (gap #3, agent 3's territory). The
-     encoder emits the source string; final byte output for these
-     types needs the script compiler.
+     literal `"1"`. Implemented in the encoder for Text /
+     Button / Button_T (literal `"1"` for style=4); the LOAD-borderw
+     variant for other styles is not yet fixture-verified.
+   - The full `if/else` rewriter for `button`/`button_t` is **done**
+     (`_encode_button_init`, byte-identical round-trip for
+     `17_more_components/17.tft` page 2 b0 and page 3 b0_t).
+     `checkbox` / `radiobutton` use the same compiler infrastructure
+     but their templates emit `sya0` scratch assignments which the
+     init encoder still treats as comments (no byte-identical
+     verification yet).
 
 4. **Event handlers beyond Ref**: `editref`, `down`, `up`, `unload`
    are also part of the per-component data stream after the Ref
