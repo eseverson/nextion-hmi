@@ -21,9 +21,6 @@ the F-series device runtime.
 - [`h2-cipher.md`](h2-cipher.md) — F-series H2 cipher (stateful 3-stage
   subtract/XOR mix, 16-byte key block). Reference impl:
   [`scripts/lib/h2_cipher.py`](../scripts/lib/h2_cipher.py).
-- [`achmi-internals.md`](achmi-internals.md) — How the editor's
-  `achmi.dll` is unpacked, plus the 200-entry dispatch table that
-  contains the file-format primitives.
 - [`directory-checksum.md`](directory-checksum.md) — HMI top-level
   directory checksum (`CRC32_T` over entries + `"ADEC"` sentinel),
   validated by `CFSOpenSystem` on every editor open. Reference impl:

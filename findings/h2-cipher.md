@@ -15,7 +15,8 @@ The cipher is implemented in `achmi.dll` subcommand `0x21` (managed
 wrapper name `HmiSafeAppfree11DecData`), at VA `0x10004ec0`. The
 dispatch table at `.rdata:0x1ca28` is shared by the editor's wire
 protocol and its file-format crypto; subcommand IDs are
-`(call_id − 0x10000)`.
+`(call_id − 0x10000)`. (The editor-unpacking provenance behind this
+extraction is kept in a separate private repo.)
 
 Related subcommands in the same table:
 
@@ -27,8 +28,6 @@ Related subcommands in the same table:
 | 0x23   | `HmiSafeWriteTFTFileSafe`     | TFT trailing 4-byte CRC writer               |
 | 0x25   | `HmiSafeWriteHMIFileSafe`     | HMI-level finalise                           |
 | 0x27   | `HmiSafeWritePageFileSafe`    | Page CRC (see [`format-hmi.md`](format-hmi.md)) |
-
-Extraction details are in [`achmi-internals.md`](achmi-internals.md).
 
 ## Encrypted region layout
 
@@ -136,5 +135,4 @@ disassembly of `achmi.dll`.
   13 within their 32-byte slot), suggesting an array of similar
   records with a few flag/counter bits each.
 - A cleaner schema map of `appinf1` fields beyond the address block
-  (positions 0x30..0x3F) is in the disassembly task list, see
-  [`achmi-internals.md`](achmi-internals.md).
+  (positions 0x30..0x3F) remains on the disassembly task list.

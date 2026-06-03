@@ -1784,6 +1784,6 @@ Three parallel subagents could pick up Tasks 4+5 (parser+executor — naturally 
 ## Commit message convention
 
 All commits use short titles, no body unless something non-obvious about
-*why* needs saying. **No `Co-Authored-By: Claude` trailer.** Author as
-Evan Severson `208220+eseverson@users.noreply.github.com`. Per-commit pattern:
-`git -c user.name="Evan Severson" -c user.email="208220+eseverson@users.noreply.github.com" commit -m "..."`.
+*why* needs saying. **No `Co-Authored-By: Claude` trailer.** Author as the
+repo's configured git identity (no per-commit `-c user.name`/`user.email`
+overrides).

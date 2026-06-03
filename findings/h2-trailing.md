@@ -90,9 +90,8 @@ encryption path (subcmd `0x20`). Whether it does an explicit
 `0xff`-prefilled buffer is unconfirmed at the assembly level — but the
 observable invariant is exact.
 
-(The same routine also does the "4-byte cycling XOR over a 0x4c-byte
-sub-buffer" mentioned in
-[`achmi-internals.md`](achmi-internals.md) — that's the model-id
+(The same routine also does a "4-byte cycling XOR over a 0x4c-byte
+sub-buffer" in the editor's TFT writer — that's the model-id
 signature work on the *appinf1* portion, not the trailing region.)
 
 ## Worked example: baseline TFT

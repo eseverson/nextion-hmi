@@ -9,10 +9,8 @@ offset directly. The same buffer is also where variable-length
 attribute payloads (strings, picture-data buffers, dynamic curve/gmov
 buffers) get assigned their `attmemorypos` value.
 
-This document recovers the allocator from
-`/tmp/decoded/plain_hmitype.dll` (IL dump at
-`/tmp/hmitype_all.il`, regenerated via the
-[`achmi-internals.md`](achmi-internals.md) pipeline).
+This document recovers the allocator from the decompiled `hmitype.dll`
+(managed IL dump).
 
 It unblocks the three roadmap items called out in
 [`next-steps.md`](next-steps.md):

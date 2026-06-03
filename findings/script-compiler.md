@@ -12,9 +12,8 @@ in [`scripts/lib/script_compiler.py`](../scripts/lib/script_compiler.py).
 
 ## Where the editor's compiler lives
 
-Confirmed by disassembling `plain_hmitype.dll` (decompiled via
-`MONO_PATH=/tmp/all_dlls/ monodis` after the unpacking pipeline from
-[`achmi-internals.md`](achmi-internals.md) leaves it on disk).
+Confirmed by disassembling the decompiled `hmitype.dll` (managed IL via
+`monodis`).
 
 | Component                | Location                                          | Role                                                  |
 |--------------------------|---------------------------------------------------|-------------------------------------------------------|

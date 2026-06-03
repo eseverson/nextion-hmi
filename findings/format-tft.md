@@ -108,9 +108,9 @@ decrypt to plausibly-structured content; partial decoding is in
 Earlier writeups labelled the address fields with TFTTool's T0/K0 names
 (`pictures_address` etc.) and put counts at `0x30..0x3F` as u32 fields;
 that's wrong on F-series — counts are u16 starting at `+0x38` and the
-address slots above are distinct. Source of truth is
-`hmitype.dll!appinf1` as decompiled in
-[`achmi-internals.md`](achmi-internals.md).
+address slots above are distinct. Source of truth is the
+`hmitype.dll!appinf1` struct as decompiled from the editor's managed
+assemblies.
 
 ### AppAllvas — global scalar name table
 

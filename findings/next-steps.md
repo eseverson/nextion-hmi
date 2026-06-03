@@ -140,8 +140,7 @@ size, AppAllvas count, total attribute-record bytes) and returns both
 the structured field dict and the 196-byte encrypted H2 ready to write
 at file offset 0xC8. Verified byte-identical for all 5 fixtures
 (`16_loop`, `17_more_components`, `15_picture`, `11_add_page`,
-`01_orientation_flip`) via the round-trip in
-`scripts/research/compute_appinf1.py`.
+`01_orientation_flip`) via round-trip against those fixtures.
 
 **Caveats** (would benefit from a fixture):
 
