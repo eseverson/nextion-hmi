@@ -54,14 +54,16 @@ def test_parse_touch_missing_target():
 
 
 def test_headless_touch_click_navigates_via_hotspot(hmi_path, tmp_path):
-    """Clicking m0 on the main page (Touch Press = `page 1`) should switch to settings."""
+    """Clicking m0 on the main page (Touch Press = `page 1`) switches to
+    gauge — numeric page refs resolve via the manifest's declaration
+    order (main, gauge, settings, error), same as the device."""
     state = load_hmi(hmi_path)
     transport = _StubTransport()
     app = HeadlessApp(state, transport, out_path=tmp_path / "live.png")
     assert state.active_page.name == "main"
     transport.push(b"touch m0")
     app.step()
-    assert state.active_page.name == "settings"
+    assert state.active_page.name == "gauge"
 
 
 def test_headless_touch_press_only_does_not_release(hmi_path, tmp_path):
@@ -72,8 +74,8 @@ def test_headless_touch_press_only_does_not_release(hmi_path, tmp_path):
     # (since the script ran in codesdown), but no codesup.
     transport.push(b"touch m0 press")
     app.step()
-    # After press, we're on settings (from the page-switch script).
-    assert state.active_page.name == "settings"
+    # After press, we're on gauge (from the page-switch script).
+    assert state.active_page.name == "gauge"
 
 
 def _make_state_with(*components):

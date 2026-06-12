@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 """add_hotspot.py — add a Hotspot to a page of an existing .HMI file.
 
+WARNING (me/nextion#1): this tool splices at the PCH-derived ``max_end``
+and discards the bytes after it, which amputates the last component's
+record overflow on any page whose components have event handlers. The
+editor's real algorithm (isolated from fixtures 06->07) appends the
+record at the true blob end with a PCH entry of
+``(last_start + last_size + 12, len(record), 0)`` — see
+``add_nav_hotspot_hmi.py`` for a correct, fixture-validated
+implementation. Do not use this tool on non-trivial pages until it's
+rewritten on that model.
+
 First proof-of-concept of programmatic HMI authoring. Takes a target
 .HMI and appends a Hotspot to the named page, following the editor's
 append-only journal model (the old page payload is tombstoned in the

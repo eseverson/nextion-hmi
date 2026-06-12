@@ -88,4 +88,4 @@ def test_touch_post_navigates(app_and_server):
     assert app.state.active_page.name == "main"
     status, _ = _http_post(f"http://127.0.0.1:{server.port}/touch", b"m0")
     assert status == 200
-    assert app.state.active_page.name == "settings"
+    assert app.state.active_page.name == "gauge"

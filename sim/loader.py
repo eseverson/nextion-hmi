@@ -59,6 +59,38 @@ def load(path: str | Path) -> DisplayState:
     return load_hmi(p)
 
 
+def _pa_declaration_order(path: Path, hmi) -> list[int]:
+    """Page .pa stems in main.HMI manifest declaration order.
+
+    The manifest's trailing reference array (main.HMI +0x60, 16-byte
+    rows: 8B ext + 8B name, NUL-left-padded) lists every resource in
+    declaration order; the compiler emits pages in that order, so a
+    page's index here IS its device page id. Returns [] if the manifest
+    can't be parsed (caller falls back to the .pa stem)."""
+    entry = next(
+        (c for c in hmi.header.content if getattr(c, "name", "") == "main.HMI"),
+        None,
+    )
+    if entry is None:
+        return []
+    raw = Path(path).read_bytes()
+    blob = raw[entry.start:entry.start + entry.size]
+    order: list[int] = []
+    o = 0x60
+    while o + 16 <= len(blob):
+        ext = blob[o:o + 8].strip(b"\x00 ")
+        name = blob[o + 8:o + 16].strip(b"\x00 ")
+        if not ext and not name:
+            break
+        if ext == b"pa":
+            try:
+                order.append(int(name.split(b".", 1)[0]))
+            except ValueError:
+                return []
+        o += 16
+    return order
+
+
 def load_hmi(path: str | Path) -> DisplayState:
     """Load a Nextion HMI file and return a populated DisplayState."""
     _ensure_ansi_codec()
@@ -67,9 +99,13 @@ def load_hmi(path: str | Path) -> DisplayState:
 
     hmi = HMI(str(path))
     # Pair each parsed Page with the matching directory entry so we can
-    # recover the page id from the .pa filename prefix (e.g. "0.pa" → 0).
-    # The HMI's `page <n>` command, the firmware's commands, and Touch
-    # event payloads all use this id, NOT the directory's iteration order.
+    # recover the page's .pa stem (e.g. "0.pa" → 0). Numeric `page <n>`
+    # refs do NOT use that stem: the editor compiles pages in the
+    # main.HMI manifest's declaration order, and that index is what the
+    # device (and therefore every numeric page command) means. The two
+    # diverge as soon as pages are reordered in the editor (miata-dash:
+    # declaration order 0,2,1,3 = main,gauge,settings,error).
+    decl_order = _pa_declaration_order(Path(path), hmi)
     page_dir_entries = [c for c in hmi.header.content if c.isPage()]
     assert len(page_dir_entries) == len(hmi.pages), (
         f"directory page count {len(page_dir_entries)} != "
@@ -85,9 +121,11 @@ def load_hmi(path: str | Path) -> DisplayState:
             continue
         pa = page_comp.rawData["att"]
         page_name = pa.get("objname") or f"page{len(pages)}"
-        # dir_entry.name is something like "0.pa"; the integer prefix is the id.
+        # dir_entry.name is something like "0.pa"; map its stem through
+        # the manifest's declaration order to get the device page id.
         try:
-            page_id = int(dir_entry.name.split(".", 1)[0])
+            pa_stem = int(dir_entry.name.split(".", 1)[0])
+            page_id = decl_order.index(pa_stem) if decl_order else pa_stem
         except (ValueError, AttributeError):
             page_id = len(pages)
         # Page-level event scripts (codesload, codesloadend, codesunload) live
