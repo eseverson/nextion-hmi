@@ -425,8 +425,12 @@ offset  size  field
   +28   u32   objdatarampos  # byte offset of this component's
                              #   `objdata_Ram` inside the page media blob
                              #   (matches `binattinf.objdatarampos`)
-  +32   12 bytes ??          # mostly zeros; byte +34 is 0x7f (= 127)
+  +32   4 bytes ??           # mostly zeros; byte +34 is 0x7f (= 127)
                              #   for every entry; meaning unknown
+  +36   s16   movex          # objdata_Ram head fields (see
+  +38   s16   movey          #   sim/tft_loader._parse_objdata_ram)
+  +40   s16   x              # 0 in the single-page fixtures, which hid
+  +42   s16   y              #   these from the original decode
   +44   u16   w
   +46   u16   h
   +48   u16   endx           # = x + w − 1

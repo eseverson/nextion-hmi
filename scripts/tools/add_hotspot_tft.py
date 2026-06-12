@@ -66,7 +66,8 @@ def _encode_objxinxi_entry(*, lei: int, id_: int, init_off: int = 0xFFFFFFFF,
       +4    u32  init_off (= 0xFFFFFFFF for Hotspots)
       +8    20×0xff padding
       +28   u32  objdatarampos
-      +32   12 bytes ?? (mostly zero; byte +34 = 0x7f on every entry)
+      +32   8 bytes ?? (mostly zero; byte +34 = 0x7f on every entry)
+      +40   s16  x / +42 s16 y (movex/movey live at +36/+38)
       +44   u16  w / +46 u16 h / +48 u16 endx / +50 u16 endy
       +52..+231  Attstrpianyi (180 bytes):
         +0..+3  u32 bytecode_offset (= init_off; 0xFFFFFFFF for Hotspot)
@@ -81,6 +82,7 @@ def _encode_objxinxi_entry(*, lei: int, id_: int, init_off: int = 0xFFFFFFFF,
         buf[i] = 0xFF
     struct.pack_into("<I", buf, 28, objdatarampos & 0xFFFFFFFF)
     buf[34] = 0x7F
+    struct.pack_into("<hh", buf, 40, x, y)
     struct.pack_into("<HHHH", buf, 44,
                      w & 0xFFFF, h & 0xFFFF,
                      (x + w - 1) & 0xFFFF, (y + h - 1) & 0xFFFF)
@@ -168,7 +170,9 @@ def add_hotspot_to_tft(tft: bytes, *, page_idx: int = 0,
 
     # Figure out the new component's parameters.
     new_obj_idx = target["objstar"] + target["objqyt"]
-    new_comp_id = new_obj_idx  # idiomatic — every fixture obeys id == position
+    # Component ids are page-local (= position within the page). Every
+    # single-page fixture obeys id == global position, which masked this.
+    new_comp_id = target["objqyt"]
     # objdatarampos: each component's media-blob offset. For Hotspot
     # (no media), we mirror the editor's convention: pick the smallest
     # value not in use by another object on this page. To stay
