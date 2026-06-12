@@ -50,6 +50,29 @@ def _get_live_pa(raw: bytes, page_id: int) -> tuple[int, bytes]:
     raise RuntimeError(f"no live {target} in directory")
 
 
+def _apply_resize(blob: bytearray, anchor: int, delta: int,
+                  label: str) -> bytes:
+    """Shared PCH/header bookkeeping after a splice: grow the span
+    containing ``anchor``, shift later spans, fix datasize and CRC."""
+    nobj = struct.unpack_from("<I", blob, 12)[0]
+    containing = None
+    for i in range(nobj):
+        off = PCH_BASE + i * PCH_SIZE
+        s, sz, third = struct.unpack_from("<III", blob, off)
+        if containing is None and s <= anchor < s + sz:
+            containing = i
+            struct.pack_into("<I", blob, off + 4, sz + delta)
+        elif containing is not None:
+            struct.pack_into("<I", blob, off, s + delta)
+    if containing is None:
+        raise ValueError(f"offset {anchor:#x} not inside any PCH span")
+
+    struct.pack_into("<I", blob, 4, len(blob))  # datasize
+    struct.pack_into("<I", blob, 0, page_crc(bytes(blob)))
+    print(f"{label} in PCH #{containing} (delta {delta:+d})")
+    return bytes(blob)
+
+
 def resize_str_in_pa(pa: bytes, offset: int, new_value: bytes) -> bytes:
     """Return a new .pa blob with the string value at ``offset`` replaced."""
     tb = pa[offset - 20]
@@ -61,31 +84,43 @@ def resize_str_in_pa(pa: bytes, offset: int, new_value: bytes) -> bytes:
     if not 1 <= len(new_value) <= 14:
         raise ValueError("new value must be 1..14 bytes (typebyte limit)")
     name = pa[offset - 16:offset - 8].split(b"\x00", 1)[0]
-    delta = len(new_value) - old_len
 
     blob = bytearray(pa)
     blob[offset - 20] = 0x10 | len(new_value)
     blob[offset:offset + old_len] = new_value
+    return _apply_resize(blob, offset - 20,
+                         len(new_value) - old_len,
+                         f"record '{name.decode(errors='replace')}' "
+                         f"{old_len} -> {len(new_value)} bytes")
 
-    # PCH bookkeeping: grow the containing span, shift later spans.
-    nobj = struct.unpack_from("<I", blob, 12)[0]
-    containing = None
-    for i in range(nobj):
-        off = PCH_BASE + i * PCH_SIZE
-        s, sz, third = struct.unpack_from("<III", blob, off)
-        if containing is None and s <= offset - 20 < s + sz:
-            containing = i
-            struct.pack_into("<I", blob, off + 4, sz + delta)
-        elif containing is not None:
-            struct.pack_into("<I", blob, off, s + delta)
-    if containing is None:
-        raise ValueError(f"offset {offset:#x} not inside any PCH span")
 
-    struct.pack_into("<I", blob, 4, len(blob))  # datasize
-    struct.pack_into("<I", blob, 0, page_crc(bytes(blob)))
-    print(f"record '{name.decode(errors='replace')}' in PCH #{containing}: "
-          f"{old_len} -> {len(new_value)} bytes (delta {delta:+d})")
-    return bytes(blob)
+def resize_script_line_in_pa(pa: bytes, comp_objname: bytes, event: bytes,
+                             old_line: bytes, new_line: bytes) -> bytes:
+    """Replace one source line of an event-handler script.
+
+    Event scripts are stored inside the component record as
+    ``u32 len "<event>-<N>"`` (N = line count) followed by N
+    length-prefixed line records (e.g. main's tm0 carries
+    ``codestimer-66``). Replacing a line keeps N constant, so only the
+    one line record resizes; span/size bookkeeping is shared with
+    string-attr resizes (PCH sizes include script bytes)."""
+    o = pa.find(bytes([0x10 | len(comp_objname), 0, 0, 0])
+                + b"objname\x00" + b"\x00" * 8 + comp_objname)
+    if o < 0:
+        raise ValueError(f"no component named {comp_objname!r} on this page")
+    e = pa.find(b"\x00\x00\x00" + event + b"-", o)
+    if e < 0:
+        raise ValueError(f"{comp_objname!r} has no {event!r} script")
+    rec = pa.find(struct.pack("<I", len(old_line)) + old_line, e)
+    if rec < 0:
+        raise ValueError(f"line {old_line!r} not found in {event!r} script")
+
+    blob = bytearray(pa)
+    struct.pack_into("<I", blob, rec, len(new_line))
+    blob[rec + 4:rec + 4 + len(old_line)] = new_line
+    return _apply_resize(blob, rec, len(new_line) - len(old_line),
+                         f"{comp_objname.decode()}.{event.decode()} line "
+                         f"{old_line!r} -> {new_line!r}")
 
 
 def resize_str_in_hmi(raw: bytes, page_id: int, offset: int,

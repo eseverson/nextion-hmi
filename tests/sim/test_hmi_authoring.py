@@ -102,3 +102,21 @@ def test_clone_nav_hotspot_roundtrip(hmi_path):
     assert struct.unpack_from("<I", new_pa, 0)[0] == page_crc(new_pa)
     assert b"m1" in new_pa[-len(m0):]
     assert b"page 2" in new_pa[-len(m0):]
+
+
+def test_resize_script_line_roundtrip(hmi_path):
+    """Replacing one line of tm0's codestimer keeps the page consistent:
+    line count marker unchanged, CRC valid, sizes track the delta."""
+    from scripts.tools.resize_str_hmi import resize_script_line_in_pa
+
+    pa = _live_pa(hmi_path)
+    old_line = b"if(x8.val>0)"
+    new_line = b"if(sys0>0)"
+    assert struct.pack("<I", len(old_line)) + old_line in pa
+    new_pa = resize_script_line_in_pa(pa, b"tm0", b"codestimer",
+                                      old_line, new_line)
+    assert len(new_pa) == len(pa) + len(new_line) - len(old_line)
+    assert struct.pack("<I", len(new_line)) + new_line in new_pa
+    assert b"codestimer-66" in new_pa  # line count unchanged
+    assert struct.unpack_from("<I", new_pa, 4)[0] == len(new_pa)
+    assert struct.unpack_from("<I", new_pa, 0)[0] == page_crc(new_pa)
