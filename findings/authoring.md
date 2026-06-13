@@ -1,21 +1,93 @@
 # Programmatic authoring — current capabilities
 
-Status as of 2026-05-17. Two parallel paths exist for mutating Nextion
+Status as of 2026-06-13. Two parallel paths exist for mutating Nextion
 project files without going through the Nextion Editor: HMI-side
 (takes a `.HMI`, produces a new `.HMI` the editor opens and recompiles)
 and TFT-side (takes a `.tft`, produces a `.tft` the device runs
 directly). They share the underlying primitives — page CRC, H2 cipher,
 attribute-record layout — but differ in which container they patch.
 
-## Tools
+## Unified CLI — `scripts/nxt.py`
 
-| Tool | Input | Output | Notes |
+All per-operation tools are consolidated under one entry point:
+
+```
+scripts/nxt.py <subcommand> [args...]
+# or: python -m scripts.nxt <subcommand>
+```
+
+### Safe subcommands (hardware-proven or read-only)
+
+| Subcommand | Input | Output | Notes |
 |---|---|---|---|
-| [`scripts/tools/add_hotspot.py`](../scripts/tools/add_hotspot.py)         | `.HMI` | `.HMI` | Editor opens cleanly. Verified on `00_baseline/base.HMI` and miata-dash. |
-| [`scripts/tools/add_hotspot_tft.py`](../scripts/tools/add_hotspot_tft.py) | `.tft` | `.tft` | All three CRC layers reseal; new entry matches existing Hotspots. |
-| [`scripts/tools/add_xfloat_tft.py`](../scripts/tools/add_xfloat_tft.py)   | `.tft` | `.tft` | Records + objxinxi + init bytecode all generated. Untested on hardware. See limitations below. |
+| `inspect-hmi` | `.HMI` | stdout | Structured dump: pages, components, fonts, Program.s. |
+| `inspect-tft` | `.tft` | stdout | H1/H2 header fields (partial H2 decrypt). |
+| `diff-hmi` | two `.HMI` | stdout | Directory + payload diff. |
+| `diff-tft` | two `.tft` | stdout | H1/H2/resource/usercode region diff. |
+| `diff-bytes` | two files | stdout | Raw per-byte diff with hex windows. |
+| `patch-hmi` | `.HMI` | `.HMI` | Same-length byte patch inside a `.pa` payload; reseals page CRC. |
+| `patch-tft --raw-offset` | `.tft` | `.tft` | **Hardware-proven** same-length body patch; reseals all three CRCs. |
+| `patch-tft --h1-offset` | `.tft` | `.tft` | H1 plaintext edit + reseal. |
+| `patch-tft --h2-offset` | `.tft` | `.tft` | H2 plaintext edit (re-encrypted) + reseal. |
+| `patch-tft --verify` | `.tft` | stdout | CRC verification only; no edit. |
+| `resize-str` | `.HMI` | `.HMI` | Resize a string attribute value (HMI-first; reseals CRC + directory). |
+| `hotspot` | `.HMI` | `.HMI` | **Blessed structural path**: clone-m0 nav hotspot add (HMI-first). |
+| `list-tft` | `.tft` | stdout | List components with inferred serial names. |
+| `extract-pages` | `.tft` | PNGs | Extract RGB565 images from the resource section. |
+| `preview` | `.HMI` | PNGs | Render pages via the simulator renderer. |
+| `regen-schemas` | `findings/attrs-raw.txt` | `lib/tft_attrs_schemas.py` | Regenerate attribute schemas. |
 
-## HMI-side authoring (`add_hotspot.py`)
+### Unsafe / experimental subcommands (require `--unsafe` flag)
+
+These produce TFTs that pass CRC validation and simulate correctly but are
+rejected by the real NX4832F035 hardware ("check error" / "system data
+error") — see me/nextion#1 and #3.
+
+```
+nxt --unsafe add-hotspot-tft source.tft -o new.tft --page 0 --x 0 --y 0 --w 60 --h 60
+nxt --unsafe add-xfloat-tft  source.tft -o new.tft --page 0 ...
+nxt --unsafe add-hotspot-hmi source.HMI -o new.HMI --page 0 ...  (old template; use hotspot instead)
+```
+
+The flag triggers a loud stderr warning and returns exit code 2 if omitted.
+
+### Safe path for structural display changes
+
+**Edit the HMI source → Nextion Editor compile to TFT** (or a future
+`nxt compile` subcommand once the from-scratch assembler covers all
+component types). The only hardware-proven direct-TFT edit is
+`patch-tft --raw-offset` for same-length in-place patches.
+
+## Underlying tools in `scripts/tools/`
+
+The individual files in `scripts/tools/` remain the library backends.
+`nxt.py` is a thin dispatcher into them — each tool's `main()` and
+exported functions are unchanged, so existing tests and scripts that
+`import` from `scripts.tools.*` continue to work.
+
+| File | Status | Exposed by `nxt` subcommand |
+|---|---|---|
+| `add_nav_hotspot_hmi.py` | ✅ active | `hotspot` |
+| `resize_str_hmi.py` | ✅ active | `resize-str` |
+| `patch_hmi.py` | ✅ active | `patch-hmi` |
+| `patch_tft.py` | ✅ active | `patch-tft` |
+| `inspect_hmi.py` | ✅ active | `inspect-hmi` |
+| `inspect_tft.py` | ✅ active | `inspect-tft` |
+| `diff_hmi.py` | ✅ active | `diff-hmi` |
+| `diff_tft.py` | ✅ active | `diff-tft` |
+| `diff_bytes.py` | ✅ active | `diff-bytes` |
+| `list_components_tft.py` | ✅ active | `list-tft` |
+| `extract_pages.py` | ✅ active | `extract-pages` |
+| `preview_page.py` | ✅ active | `preview` |
+| `regen_attrs_schemas.py` | ✅ active | `regen-schemas` |
+| `add_hotspot.py` | ⚠️ unsafe (me/nextion#1) | `--unsafe add-hotspot-hmi` |
+| `add_hotspot_tft.py` | ⚠️ unsafe (me/nextion#3) | `--unsafe add-hotspot-tft` |
+| `add_xfloat_tft.py` | ⚠️ unsafe (me/nextion#3) | `--unsafe add-xfloat-tft` |
+| `analyze_editor_outputs.py` | research script | (not wired; run directly) |
+| `dump_tft.py` | research script (TFTTool dep) | (not wired; run directly) |
+| `list_models.py` | research script (TFTTool dep) | (not wired; run directly) |
+
+## HMI-side authoring (`hotspot` / `add_hotspot.py`)
 
 ### What the tool does
 
