@@ -141,7 +141,7 @@ on an exact match; one fixture-backed test per verified block.
 Turning the byte-exact TFT→TFT round-trip into a real HMI→TFT compiler:
 read the `.HMI` and *generate* each region, replacing the "copy verbatim
 from TFT" spans one at a time while keeping the whole-file round-trip
-byte-identical. Test count 206 → 223.
+byte-identical. Test count 206 → 238.
 
 ### Regions now GENERATED from the HMI (byte-verified)
 
@@ -179,52 +179,80 @@ byte-identical. Test count 206 → 223.
   just before the page media blob), so it is a separate back-patch input.
 - **Page directory framing** — `scripts/lib/page_dir_encoder.py`
   (`tests/sim/test_page_dir_encoder.py`). Generates `objstar` (cumulative
-  object count) + `objqyt` (per-page count) + `res0`=0; the three
-  strdata-relative offsets (`hexpos`/`attdataaddr_rel`/`medatapos`) are
-  allocator/layout inputs. Whole directory byte-exact.
+  object count) + `objqyt` (per-page count) + `res0`=0; `medatapos` is now
+  GENERATED (media allocator). `hexpos`/`attdataaddr_rel` remain layout
+  inputs. Whole directory byte-exact.
+- **Per-page component-name hash table** (media-blob header) —
+  `build_page_name_hash_table` in `hmi_model.py`. `<u32 records_bytes>` +
+  sorted `(u32 hash_objname, u16 ordinal)` over every object (page pseudo
+  = ordinal 0) + `<u32 terminator = medatapos+8>`. Byte-exact, all 4 pages.
+- **Per-page media allocator — KEYSTONE CRACKED** —
+  `scripts/lib/media_allocator.py` (`tests/sim/test_media_allocator.py`).
+  Reproduces every object's `objdatarampos` and the page's `medatapos`
+  from the HMI page model alone:
+    * frame start = `16 + 4*ceil(num_objects/4)` (16-byte runtime prefix +
+      a ceil(n/4)-word per-object status array);
+    * each object advances the cursor by `SIZEOF_OBJDATA_T1[lei]`, 4-aligned;
+    * Text(116)/Button(98)/Button_T(53) whose `txt` byte-length+1 exceeds
+      its inline buffer (16/11/11) spill `round4(len+1)` bytes inline after
+      the block (only s0 "Danger to manifold!!"=20 spills in the project);
+    * `medatapos = frame_end - 16`.
+  Verified byte-exact for all 4 pages; `objdatarampos` (objxinxi field) and
+  `medatapos` (page-dir + name-hash terminator) are now wired to use it.
 
 ### Still COPIED verbatim from the reference TFT
 
-- Per-page **media blobs** (the `hexpos` private-memory images).
-- The full **binattinf record values** (the `attmemorypos`/max/min/
-  objdatarampos fields per attribute) and the per-component **attstr
-  88-slot tables** (the objxinxi→record-index mapping).
-- The objxinxi **offset fields** (init_off, the 5 event slots,
-  objdatarampos, attstr_bytecode_offset) and the page-dir offsets.
+- The **binattinf record values** + the per-component **attstr 88-slot
+  tables** (the objxinxi→record-index mapping). The generation RULES are
+  now fully reversed (see below) — implementation is the next step.
+- Per-page **media blobs** beyond the name-hash header (the per-object
+  data blocks + the trailing `09 22 08` page-init bytecode).
+- The objxinxi **bytecode-offset fields** (init_off, the 5 event slots,
+  attstr_bytecode_offset) and the page-dir `hexpos`/`attdataaddr_rel` —
+  item #3 second-pass back-patching (now resolvable: the layout is fixed
+  by the media allocator + region sizes).
 - The resources region (fonts/pictures, 0x10000–0x70000) — OUT OF SCOPE.
 
-### THE keystone blocker — per-page media allocator (`objdatarampos`)
+### binattinf record-value generation rules (reversed 2026-06-13)
 
-Generating the media blobs, the binattinf record `objdatarampos`/value
-fields, the objxinxi `objdatarampos` + offset fields, the attstr slot
-tables, and the page-dir offsets all converge on ONE missing piece: the
-editor's **per-page private-memory allocator** that lays out each page's
-media blob and assigns every component its `objdatarampos`.
+Decoded from page-1 (page+hotspot). `build_component_records` exists but
+its *generation* defaults are wrong for this F-series project — these are
+the corrections to wire up next:
 
-Reconnaissance (page-1 "gauge", the simplest page — page + hotspot, 51-byte
-blob): the media blob is `<u32 0x0c> <16-byte well-known name-hash table
-(2691ed33 …)>` then per-object blocks at `objdatarampos` (page=0x14,
-hotspot=0x1c) then trailing init bytecode (`09 22 08 …`). `memory_allocator.py`
-T1 already computes *public-memory* frame offsets (`frame_offset`), but NOT
-the blob *image* (header + hash table + per-block content bytes + alignment)
-nor the `objdatarampos` cursor that the binattinf/objxinxi records reference.
-That image-builder is the next thing to reverse — it unblocks items 2c
-(media blobs), the rest of #2 (binattinf values, attstr tables), and #3
-(absolute offset back-patching, which needs the layout fixed first).
+- **str_encodeh_star = 0** (the current encoder writes `objdatarampos&0xFF`
+  — wrong; the project uses 0 everywhere).
+- **frompageid** = device page id; **fromobjid** = the object's index on
+  the page (page pseudo = 0, first user component = 1, …).
+- **objdatarampos** = the media allocator's value for that object.
+- **Head records** (id, type, x, y, w, h, endx, endy) use
+  `change=True, datafrom=False` (the current encoder forces head
+  `change=False` — wrong here). Their `attmemorypos` = the *literal*
+  value (id, lei, x, y, w, h, endx=x+w-1, endy=y+h-1). attlei/max/min:
+  id/type = UU8(1)/0..255; x = 0x0b/±6000; y = 0x0c/±6000; w = 0x0d/±2000;
+  h = 0x0e/±2000; endx/endy = SS16(8)/-32768..32767. `vscope` = UU8/0..1,
+  value 0.
+- **datafrom=True attrs** (RAM-backed: sta, bco, and the rest of
+  `GetAtts_WithNoHead`) store `attmemorypos = objdatarampos + attposup`
+  (NOT the literal value), with the attr's max/min bounds. e.g. page sta:
+  attposup 4 → mem 0x18; page bco: attposup 6 → mem 0x1a, and bco uses
+  `change=False`. The literal authored value lives in the media blob's
+  per-object data block, not in binattinf.
+- The **attstr 88-slot table** maps `name_to_slot(attr)` → the record's
+  page-wide index; `build_component_block` already does this correctly
+  when fed the right record list.
 
 ### Next concrete steps (dependency order)
 
-1. **Per-page media allocator / blob image builder** — produce the
-   `hexpos` blob + every component's `objdatarampos` from the HMI page
-   model. Start from page 1 (page+hotspot) and grow to the others.
-2. **binattinf values** — once `objdatarampos` is known, feed it +
-   the HMI attribute values into `tft_attrs_encoder.build_component_block`
-   to generate the record values and the attstr slot tables; verify
-   per-page byte-exact (page 1 first).
-3. **Offset back-patch (item #3)** — with regions generated rather than
-   copied, run a second pass to fill objxinxi.init_off + 5 slots +
-   attstr_bytecode_offset, page-dir hexpos/attdataaddr_rel/medatapos, and
-   appinf1 region pointers from the fixed layout.
+1. **binattinf values** — extend `build_component_records` with the rules
+   above (str_encodeh_star=0, head change=True, datafrom→frame-offset
+   attmemorypos via ATTPOSUP_TABLE_T1, per-attr change flags). Feed it the
+   media allocator's `objdatarampos` + HMI attr values; verify per-page
+   byte-exact (page 1 → page 3 → page 2 → page 0).
+2. **Media blob per-object blocks + trailing page-init bytecode** — the
+   data after the name-hash header (the `09 22 08` page-init etc.).
+3. **Offset back-patch (item #3)** — fill objxinxi.init_off + 5 slots +
+   attstr_bytecode_offset, page-dir hexpos/attdataaddr_rel, and appinf1
+   region pointers from the now-fixed layout.
 
 ## 1. Script compiler — open work
 
