@@ -47,6 +47,8 @@ the compiled *up* slot; the *down* slot is auto-generated.  See
 """
 from __future__ import annotations
 
+import re
+import struct
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
@@ -259,6 +261,75 @@ def compile_slot_from_hmi(comp: HmiComponentModel, slot: int):
     return compile_event_handler(src, CompileContext())
 
 
+# ---------------------------------------------------------------------------
+# AppAllvas — global-int name/offset/type table
+# ---------------------------------------------------------------------------
+#
+# The AppAllvas region (file ``strdataaddr + staticstrBeg`` .. ``attdataaddr``)
+# holds one 12-byte record per global ``int`` declared in ``Program.s``:
+#
+#     <u32 name_hash_LE> <u32 byte_offset> <u32 type>
+#
+#   * name_hash = crc32_bytewise(0xffffffff, name)  (same hash family as
+#     the component-name table — see findings/component-name-hashes.md).
+#   * byte_offset = the global's slot in the global-memory frame, assigned
+#     in *declaration* order (sys0=0, sys1=4, sys2=8, …; 4 bytes each).
+#   * type = 9 (SS32 — 4-byte signed int; the only global type the editor
+#     supports).
+#
+# Records are stored **sorted by name_hash ascending** (the editor keeps a
+# sorted lookup table), while the offsets retain declaration order.
+# Verified byte-for-byte against source/nextion.hmi.tft (sys0/sys1/sys2).
+
+APPALLVAS_RECORD_SIZE = 12
+APPALLVAS_TYPE_SS32 = 9
+
+_INT_DECL_LINE = re.compile(r"^\s*int\s+(.+?)\s*$")
+
+
+def parse_program_globals(program_s: str) -> list[tuple[str, int]]:
+    """Return ``[(name, byte_offset), ...]`` for every global ``int``
+    declared in ``Program.s``, in declaration order (4 bytes each).
+
+    Comments (``// …``) are stripped; multiple comma-separated names on
+    one ``int`` line are honoured."""
+    out: list[tuple[str, int]] = []
+    offset = 0
+    for raw in program_s.splitlines():
+        line = raw.split("//", 1)[0].strip()
+        if not line:
+            continue
+        m = _INT_DECL_LINE.match(line)
+        if not m:
+            continue
+        for decl in m.group(1).split(","):
+            name = decl.split("=", 1)[0].strip()
+            if name:
+                out.append((name, offset))
+                offset += 4
+    return out
+
+
+def build_appallvas(program_s: str) -> bytes:
+    """Generate the AppAllvas region bytes from ``Program.s``.
+
+    One 12-byte ``(name_hash_LE, byte_offset, type=SS32)`` record per
+    global ``int``, sorted by hash ascending.  Byte-identical to the
+    project TFT's AppAllvas span.
+    """
+    from scripts.lib.page_crc import crc32_bytewise
+
+    recs = []
+    for name, off in parse_program_globals(program_s):
+        h = crc32_bytewise(0xFFFFFFFF, name.encode("ascii"))
+        recs.append((h, off))
+    recs.sort(key=lambda r: r[0])
+    out = bytearray()
+    for h, off in recs:
+        out += struct.pack("<III", h, off, APPALLVAS_TYPE_SS32)
+    return bytes(out)
+
+
 def hmi_first_chain_source(pages: list[HmiPageModel], fallback: ChainSource) -> ChainSource:
     """Wrap a ``fallback`` chain source so that any slot listed in
     :data:`HMI_COMPILABLE_SLOTS` is GENERATED from the HMI script, and all
@@ -290,4 +361,8 @@ __all__ = [
     "compile_slot_from_hmi",
     "hmi_first_chain_source",
     "ChainSource",
+    "APPALLVAS_RECORD_SIZE",
+    "APPALLVAS_TYPE_SS32",
+    "parse_program_globals",
+    "build_appallvas",
 ]

@@ -36,8 +36,9 @@ from scripts.lib import tft_format  # noqa: E402
 from scripts.lib.page_crc import crc32_bytewise  # noqa: E402
 from scripts.lib.hmi_model import (  # noqa: E402
     load_hmi_pages, build_compiled_components, hmi_first_chain_source,
-    compile_slot_from_hmi,
+    compile_slot_from_hmi, build_appallvas, parse_program_globals,
 )
+from sim.loader import load_hmi  # noqa: E402
 
 H2_START, H2_END = 0xC8, 0xC8 + 196
 SENTINEL = 0xFFFFFFFF
@@ -241,3 +242,53 @@ def test_hmi_first_whole_file_round_trip_byte_identical():
     out[-4:] = struct.pack("<I", (body ^ info.mask) & 0xFFFFFFFF)
 
     assert bytes(out) == data, "HMI-first round-trip not byte-identical"
+
+
+def test_appallvas_generated_byte_exact():
+    """The AppAllvas global-int table is GENERATED from the HMI's
+    Program.s and matches the live TFT region byte-for-byte."""
+    data, a1 = _load(REPO_ROOT / "source" / "nextion.hmi.tft")
+    strd = a1["strdataaddr"]
+    sb = a1["staticstrBeg"]
+    ad = a1["attdataaddr"]   # strd-relative; first page's attdata start
+    live = data[strd + sb:strd + ad]
+
+    st = load_hmi(str(HMI_PATH))
+    gen = build_appallvas(st.program_s)
+    assert gen == live, f"AppAllvas mismatch: gen={gen.hex()} live={live.hex()}"
+
+    globs = parse_program_globals(st.program_s)
+    assert globs == [("sys0", 0), ("sys1", 4), ("sys2", 8)]
+    assert len(gen) == a1["AppAllvasQty"] * 12
+
+
+def test_hmi_first_round_trip_with_generated_appallvas():
+    """Whole-file round-trip stays byte-identical with the AppAllvas
+    region GENERATED from Program.s (the binattinf tail still copied)."""
+    data, a1 = _load(REPO_ROOT / "source" / "nextion.hmi.tft")
+    strd = a1["strdataaddr"]
+    pageadd = a1["pageadd"]
+    sb = a1["staticstrBeg"]
+    ad = a1["attdataaddr"]
+
+    _, _, _, pages = _build_pages_from_hmi(data, a1, hmi_first=True)
+    header = data[strd:strd + HEADER_END]
+
+    st = load_hmi(str(HMI_PATH))
+    appallvas = build_appallvas(st.program_s)
+    binattinf = data[strd + ad:pageadd]   # still copied (work-item #2)
+    tail = appallvas + binattinf
+
+    usercode = assemble_usercode_region(header, pages, tail)
+    out = bytearray(data)
+    out[strd:pageadd] = usercode
+
+    h1 = crc32_bytewise(0xFFFFFFFF, bytes(out[tft_format.H1_START:tft_format.H1_END]))
+    out[tft_format.H1_CRC_OFF:tft_format.H1_CRC_OFF + 4] = struct.pack("<I", h1)
+    h2 = crc32_bytewise(0xFFFFFFFF, bytes(out[tft_format.H2_START:tft_format.H2_END]))
+    out[tft_format.H2_CRC_OFF:tft_format.H2_CRC_OFF + 4] = struct.pack("<I", h2)
+    info = tft_format.trailing_crc_mask(data)
+    body = crc32_bytewise(0xFFFFFFFF, bytes(out[:-4]))
+    out[-4:] = struct.pack("<I", (body ^ info.mask) & 0xFFFFFFFF)
+
+    assert bytes(out) == data, "round-trip with generated AppAllvas not byte-identical"
