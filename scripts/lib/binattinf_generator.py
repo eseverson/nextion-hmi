@@ -66,6 +66,11 @@ class DatafromAttr:
     differs from the type's natural ``datafenpei`` — used for ``txt``
     (Sstr) whose record carries the inline-buffer size (16 Text / 11
     Button) rather than the 4-byte Sstr stride.
+
+    ``changeid`` is the editor's per-class "changeable attribute"
+    enumeration index written into record byte +19 (``att_changeid``).
+    Only Slider (1) and Timer (51) carry non-zero values in the fixture
+    corpus; everything else is 0.
     """
 
     name: str
@@ -75,6 +80,7 @@ class DatafromAttr:
     maxval: int
     change: bool
     merrylenth_override: int | None = None
+    changeid: int = 0
 
 
 @dataclass(frozen=True)
@@ -100,13 +106,16 @@ class LiteralAttr:
 # Per-class datafrom attribute tables, reversed from source/nextion.hmi.tft.
 # Order doesn't matter (records are placed by name via PER_LEI_LAYOUT).
 # Component classes whose binattinf block is byte-verified against
-# source/nextion.hmi.tft end-to-end (page-1 / page-3: page + hotspot).
-# The other DATAFROM_ATTRS tables below are reversed from the per-attr
-# dump but NOT yet byte-verified as whole blocks — they still need the
-# att_changeid model, the txt_maxl/Sstr long-string pairing, and the
-# `style` layout slot (see findings/next-steps.md). build_component_binattinf
-# raises for an unverified lei unless allow_unverified=True.
-VERIFIED_LEIS = frozenset({121, 109})
+# source/nextion.hmi.tft end-to-end.  121/109 (page+hotspot) and the
+# page-2 set — Slider (1), Text (116), Button (98) — all generate whole
+# blocks byte-exact (att_changeid, literal records, txt buffer all wired).
+# XFloat (59) / Prog (106) / Timer (51) / Variable (52) tables are reversed
+# but their whole blocks aren't yet verified end-to-end on a page (Variable
+# needs the 0xff sentinels + extra record; XFloat/Prog/Timer await a
+# page-0 pass once the Variable + long-string gaps close).
+# build_component_binattinf raises for an unverified lei unless
+# allow_unverified=True.
+VERIFIED_LEIS = frozenset({121, 109, 1, 116, 98})
 
 
 DATAFROM_ATTRS: dict[int, list[DatafromAttr]] = {
@@ -152,13 +161,13 @@ DATAFROM_ATTRS: dict[int, list[DatafromAttr]] = {
         DatafromAttr("mode", 0, "Select", 0, 1, True),
         DatafromAttr("sta", 1, "Select", 0, 2, True),
         DatafromAttr("psta", 2, "Select", 0, 1, True),
-        DatafromAttr("wid", 3, "UU8", 0, 255, False),
-        DatafromAttr("hig", 4, "UU8", 0, 255, False),
+        DatafromAttr("wid", 3, "UU8", 0, 255, False, changeid=1),
+        DatafromAttr("hig", 4, "UU8", 0, 255, False, changeid=2),
         DatafromAttr("bco", 6, "Color", 0, 65535, False),
         DatafromAttr("pco", 8, "Color", 0, 65535, False),
-        DatafromAttr("val", 10, "UU16", 0, 65535, False),
-        DatafromAttr("maxval", 12, "UU16", 0, 65535, False),
-        DatafromAttr("minval", 14, "UU16", 0, 65535, False),
+        DatafromAttr("val", 10, "UU16", 0, 65535, False, changeid=5),
+        DatafromAttr("maxval", 12, "UU16", 0, 65535, False, changeid=3),
+        DatafromAttr("minval", 14, "UU16", 0, 65535, False, changeid=4),
         DatafromAttr("ch", 16, "UU8", 0, 255, False),
         DatafromAttr("bco1", 22, "Color", 0, 65535, False),
     ],
@@ -175,8 +184,8 @@ DATAFROM_ATTRS: dict[int, list[DatafromAttr]] = {
         DatafromAttr("txt", 13, "Sstr", 0, 0, False, merrylenth_override=11),
     ],
     51: [  # Timer
-        DatafromAttr("tim", 0, "UU16", 50, 65534, False),
-        DatafromAttr("en", 2, "Select", 0, 1, False),
+        DatafromAttr("tim", 0, "UU16", 50, 65534, False, changeid=1),
+        DatafromAttr("en", 2, "Select", 0, 1, False, changeid=2),
     ],
     52: [  # Variable
         DatafromAttr("val", 0, "SS32", -2147483648, 2147483647, False),
@@ -274,12 +283,12 @@ def build_component_binattinf(
     stride, offset_map = PER_LEI_LAYOUT[lei]
 
     def mk(name, mem, mx, mn, type_name, *, change, datafrom,
-           merrylenth=None):
+           merrylenth=None, changeid=0):
         tv, df = ATTSHULEI_BY_NAME[type_name]
         return AttRecord(
             name=name, attmemorypos=mem, num_maxval=mx, num_minval=mn,
             objdatarampos=objdatarampos, frompageid=frompageid,
-            fromobjid=fromobjid, str_encodeh_star=0, att_changeid=0,
+            fromobjid=fromobjid, str_encodeh_star=0, att_changeid=changeid,
             typevalue=tv, datafenpei=(merrylenth if merrylenth is not None else df),
             change=change, datafrom=datafrom, ispv=True, pp=True,
         )
@@ -294,7 +303,7 @@ def build_component_binattinf(
         records[da.name] = mk(
             da.name, objdatarampos + da.attposup, da.maxval, da.minval,
             da.type_name, change=da.change, datafrom=True,
-            merrylenth=da.merrylenth_override,
+            merrylenth=da.merrylenth_override, changeid=da.changeid,
         )
 
     # Non-datafrom literal records (sta/style/spax/spay store HMI value).

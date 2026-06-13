@@ -64,14 +64,16 @@ def _gen_page_binattinf(hmi_page):
             hc.lei, hc.comp_id, x, y, w, h,
             objdatarampos=layout.objdatarampos[ci],
             frompageid=hmi_page.page_id, fromobjid=ci,
+            authored=pa,
         )
     return out
 
 
-@pytest.mark.parametrize("page_idx", [1, 3])
+@pytest.mark.parametrize("page_idx", [1, 2, 3])
 def test_page_binattinf_byte_exact(page_idx):
-    """Pages 1 & 3 (page + hotspot) binattinf blocks generate byte-for-byte
-    from the HMI + media allocator (all classes byte-verified)."""
+    """Pages 1, 2 & 3 binattinf blocks generate byte-for-byte from the HMI
+    + media allocator.  Page 2 exercises Slider (att_changeid), Text and
+    Button (literal records + txt buffer) — all now whole-block verified."""
     data, a1 = _load()
     pd = parse_page_directory(data, a1["pageadd"], a1["pageqyt"])
     hmi = load_hmi_pages(HMI_PATH)
@@ -84,9 +86,9 @@ def test_page_binattinf_byte_exact(page_idx):
 
 
 def test_verified_pages_only_use_verified_leis():
-    """Pages 1 & 3 consist solely of byte-verified component classes."""
+    """Pages 1, 2 & 3 consist solely of byte-verified component classes."""
     hmi = load_hmi_pages(HMI_PATH)
-    for pi in (1, 3):
+    for pi in (1, 2, 3):
         for hc in hmi[pi].components:
             assert hc.lei in VERIFIED_LEIS, (
                 f"page {pi} has unverified lei {hc.lei}"
