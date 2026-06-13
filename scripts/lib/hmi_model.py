@@ -330,6 +330,54 @@ def build_appallvas(program_s: str) -> bytes:
     return bytes(out)
 
 
+# ---------------------------------------------------------------------------
+# Per-page component-name hash table (media-blob header)
+# ---------------------------------------------------------------------------
+#
+# Each page's media blob (``pagexinxi.hexpos``) opens with a component-name
+# hash table the firmware binary-searches when a UART command names a
+# component on that page:
+#
+#     <u32 records_bytes>                       (= 6 * num_objects)
+#     <(u32 hash, u16 ordinal)> * num_objects   (sorted by hash ascending)
+#     <u32 terminator>                          (= medatapos + 8)
+#
+#   * ``hash`` = ``hash_objname(name)`` = ``crc32_bytewise(0xffffffff,
+#     name.ljust(14, 0))`` — see findings/component-name-hashes.md.
+#   * ``ordinal`` = the object's index within ``[page, *components]`` (the
+#     page pseudo-component is ordinal 0).
+#   * The table lists EVERY object on the page (page pseudo + all comps).
+#
+# Verified byte-for-byte against source/nextion.hmi.tft for all 4 pages.
+# ``medatapos`` (the per-page media-frame size) is produced by the per-page
+# media allocator and is supplied as an input here.
+
+NAME_HASH_RECORD_SIZE = 6
+
+
+def build_page_name_hash_table(page: HmiPageModel, medatapos: int) -> bytes:
+    """Generate one page's component-name hash table (the media-blob
+    header) from the HMI page model.
+
+    ``medatapos`` is the page's media-frame size (allocator output); the
+    table's trailing terminator is ``medatapos + 8``.
+    """
+    from scripts.lib.page_crc import hash_objname
+
+    # Objects in objxinxi order = [page pseudo, *user components].
+    names = [page.name] + [c.name for c in page.components[1:]]
+    records = sorted(
+        ((hash_objname(nm), ordinal) for ordinal, nm in enumerate(names)),
+        key=lambda r: r[0],
+    )
+    out = bytearray()
+    out += struct.pack("<I", len(names) * NAME_HASH_RECORD_SIZE)
+    for h, ordinal in records:
+        out += struct.pack("<IH", h & 0xFFFFFFFF, ordinal & 0xFFFF)
+    out += struct.pack("<I", (medatapos + 8) & 0xFFFFFFFF)
+    return bytes(out)
+
+
 def hmi_first_chain_source(pages: list[HmiPageModel], fallback: ChainSource) -> ChainSource:
     """Wrap a ``fallback`` chain source so that any slot listed in
     :data:`HMI_COMPILABLE_SLOTS` is GENERATED from the HMI script, and all
@@ -365,4 +413,6 @@ __all__ = [
     "APPALLVAS_TYPE_SS32",
     "parse_program_globals",
     "build_appallvas",
+    "NAME_HASH_RECORD_SIZE",
+    "build_page_name_hash_table",
 ]

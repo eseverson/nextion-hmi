@@ -37,6 +37,7 @@ from scripts.lib.page_crc import crc32_bytewise  # noqa: E402
 from scripts.lib.hmi_model import (  # noqa: E402
     load_hmi_pages, build_compiled_components, hmi_first_chain_source,
     compile_slot_from_hmi, build_appallvas, parse_program_globals,
+    build_page_name_hash_table,
 )
 from sim.loader import load_hmi  # noqa: E402
 
@@ -292,3 +293,26 @@ def test_hmi_first_round_trip_with_generated_appallvas():
     out[-4:] = struct.pack("<I", (body ^ info.mask) & 0xFFFFFFFF)
 
     assert bytes(out) == data, "round-trip with generated AppAllvas not byte-identical"
+
+
+@pytest.mark.parametrize("page_idx", [0, 1, 2, 3])
+def test_page_name_hash_table_generated_byte_exact(page_idx):
+    """Each page's component-name hash table (the media-blob header) is
+    GENERATED from the HMI page model + the page's medatapos, and matches
+    the live media blob's leading bytes byte-for-byte."""
+    data, a1 = _load(REPO_ROOT / "source" / "nextion.hmi.tft")
+    strd = a1["strdataaddr"]
+    pd = parse_page_directory(data, a1["pageadd"], a1["pageqyt"])
+    hmi = load_hmi_pages(HMI_PATH)
+
+    p = pd[page_idx]
+    gen = build_page_name_hash_table(hmi[page_idx], p["medatapos"])
+    live = data[strd + p["hexpos"]:strd + p["hexpos"] + len(gen)]
+    assert gen == live, (
+        f"page {page_idx} name-hash table mismatch:\n"
+        f"  gen  {gen.hex()}\n  live {live.hex()}"
+    )
+
+    # The table length is 4 + 6*num_objects + 4; ordinals cover 0..N-1.
+    num_objs = len(hmi[page_idx].components)
+    assert len(gen) == 4 + 6 * num_objs + 4
