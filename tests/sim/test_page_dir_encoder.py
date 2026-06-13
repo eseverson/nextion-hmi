@@ -71,3 +71,30 @@ def test_page_directory_byte_exact():
 
     live = data[a1["pageadd"]:a1["pageadd"] + a1["pageqyt"] * PAGE_DIR_ENTRY_SIZE]
     assert bytes(out) == live, "page directory mismatch"
+
+
+def test_medatapos_field_now_hmi_derived():
+    """The page-dir ``medatapos`` field is now GENERATED from the media
+    allocator (no longer copied from the TFT): feeding the allocator's
+    medatapos into the encoder still reconstructs every entry byte-for-byte
+    (hexpos / attdataaddr_rel remain layout inputs)."""
+    from scripts.lib.media_allocator import layout_from_hmi_page
+
+    data, a1 = _load()
+    pd = parse_page_directory(data, a1["pageadd"], a1["pageqyt"])
+    hmi = load_hmi_pages(HMI_PATH)
+    counts = [len(hp.components) for hp in hmi]
+    derived = page_object_counts(counts)
+
+    out = bytearray()
+    for (objstar, objqyt), p, hp in zip(derived, pd, hmi):
+        medatapos = layout_from_hmi_page(hp).medatapos   # GENERATED
+        inputs = PageDirInputs(
+            hexpos=p["hexpos"],
+            attdataaddr_rel=p["attdataaddr_rel"],
+            medatapos=medatapos,
+        )
+        out += encode_page_dir_entry(objstar, objqyt, inputs)
+
+    live = data[a1["pageadd"]:a1["pageadd"] + a1["pageqyt"] * PAGE_DIR_ENTRY_SIZE]
+    assert bytes(out) == live, "page directory mismatch with generated medatapos"

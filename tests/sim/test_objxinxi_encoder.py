@@ -157,3 +157,38 @@ def test_whole_objxinxi_table_byte_exact():
     )
     live = data[a1["objxinxiadd"]:a1["objxinxiadd"] + len(objs) * OBJXINXI_ENTRY_SIZE]
     assert out == live, "objxinxi table mismatch"
+
+
+def test_objdatarampos_field_now_hmi_derived():
+    """The objxinxi ``objdatarampos`` field is now GENERATED from the
+    media allocator (no longer copied from the TFT): feeding the
+    allocator's objdatarampos into the encoder still reconstructs every
+    entry byte-for-byte."""
+    from scripts.lib.media_allocator import layout_from_hmi_page
+    from scripts.lib.hmi_model import load_hmi_pages as _lhp
+
+    data, a1 = _load()
+    objs = parse_objxinxi(data, a1["objxinxiadd"], a1["objqyt"])
+    pages = _lhp(HMI_PATH)
+
+    # Generate objdatarampos per page; flatten in objxinxi order.
+    gen_objpos = []
+    for hp in pages:
+        gen_objpos.extend(layout_from_hmi_page(hp).objdatarampos)
+    assert len(gen_objpos) == len(objs)
+
+    hmi = _hmi_components_in_objxinxi_order()
+    for (lei, cid, x, y, w, h), o, objpos in zip(hmi, objs, gen_objpos):
+        slots = list(struct.unpack_from("<6I", o.raw, 4))
+        attstr = list(struct.unpack_from("<88H", o.raw, ATTSTRPIANYI_OFFSET + 4))
+        inputs = ObjxinxiInputs(
+            init_off=slots[0],
+            slot_offsets=slots[1:],
+            objdatarampos=objpos,           # GENERATED, not o.objdatarampos
+            attstr_bytecode_offset=o.attstr_bytecode_offset,
+            attstr_slots=attstr,
+        )
+        got = encode_objxinxi_entry(lei, cid, x, y, w, h, inputs)
+        assert got == o.raw, (
+            f"lei {lei} id {cid}: entry mismatch with generated objdatarampos"
+        )

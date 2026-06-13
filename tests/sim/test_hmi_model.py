@@ -305,8 +305,14 @@ def test_page_name_hash_table_generated_byte_exact(page_idx):
     pd = parse_page_directory(data, a1["pageadd"], a1["pageqyt"])
     hmi = load_hmi_pages(HMI_PATH)
 
+    # medatapos is now GENERATED from the media allocator (no longer the
+    # TFT page-dir value), making the name-hash table fully HMI-derived.
+    from scripts.lib.media_allocator import layout_from_hmi_page
+    medatapos = layout_from_hmi_page(hmi[page_idx]).medatapos
+    assert medatapos == pd[page_idx]["medatapos"]
+
     p = pd[page_idx]
-    gen = build_page_name_hash_table(hmi[page_idx], p["medatapos"])
+    gen = build_page_name_hash_table(hmi[page_idx], medatapos)
     live = data[strd + p["hexpos"]:strd + p["hexpos"] + len(gen)]
     assert gen == live, (
         f"page {page_idx} name-hash table mismatch:\n"
