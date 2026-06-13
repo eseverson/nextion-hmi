@@ -414,19 +414,24 @@ def ref_templates(comp_type: int, attrs: dict) -> list[tuple]:
     if label == "prog":
         dir_ = int(attrs.get('dir', 0))  # 0=horizontal, 1=vertical
         if dir_ == 0:
+            # Byte-verified against the live j0 ProgressBar block in
+            # source/nextion.hmi.tft (3 entries):
+            #   sya0 = val * <w> / 100
+            #   fill x,y,sya0,h,pco          (filled portion)
+            #   fill x+sya0,y,w-sya0,h,bco   (background portion)
             return [
-                ('assign', [('lit', 'sya0=')] + _val_times_w_div_100()),
+                ('assign', [('sysvar', 'sya0'), ('lit', '=')] + _val_times_w_div_100()),
                 ('fill', [
                     ('coord', 'x'), ('lit', ','),
                     ('coord', 'y'), ('lit', ','),
-                    ('lit', 'sya0'), ('lit', ','),
+                    ('sysvar', 'sya0'), ('lit', ','),
                     ('coord', 'h'), ('lit', ','),
                     ('attr', 'pco'),
                 ]),
                 ('fill', [
-                    ('expr', ('coord', 'x', '+', 'sya0')), ('lit', ','),
+                    ('expr', (('coord', 'x'), '+', 'sya0')), ('lit', ','),
                     ('coord', 'y'), ('lit', ','),
-                    ('expr', ('coord', 'w', '-', 'sya0')), ('lit', ','),
+                    ('expr', (('coord', 'w'), '-', 'sya0')), ('lit', ','),
                     ('coord', 'h'), ('lit', ','),
                     ('attr', 'bco'),
                 ]),
@@ -533,10 +538,23 @@ def _long_lit(value: int) -> bytes:
     return b"\x03" + struct.pack("<I", value & 0xFFFFFFFF)
 
 
+# Scratch sysvar operands used by the render templates (Prog / CheckBox).
+# A sysvar operand is `04 <size_class> <idx_lo> <idx_mid> <idx_hi>`; the
+# scratch sya0/sya1 slots are size_class 04 (SS32). Verified against the
+# live Prog j0 block in source/nextion.hmi.tft (sya0 = 04 04 05 00 00).
+SYSVAR_OPERANDS: dict[str, bytes] = {
+    "sya0": bytes((0x04, 0x04, 0x05, 0x00, 0x00)),
+    "sya1": bytes((0x04, 0x04, 0x07, 0x00, 0x00)),
+}
+
+
 def _emit_arg(arg, x, y, w, h, comp_id, page_id, attrs, attr_addr) -> bytes:
     kind = arg[0]
     if kind == 'lit':
         return arg[1].encode("ascii")
+    if kind == 'sysvar':
+        # A scratch sysvar (sya0/sya1) emitted as its 5-byte operand.
+        return SYSVAR_OPERANDS[arg[1]]
     if kind == 'coord':
         name = arg[1]
         return _resolve_coord(name, x, y, w, h, comp_id, page_id, attrs).encode("ascii")
@@ -553,11 +571,17 @@ def _emit_arg(arg, x, y, w, h, comp_id, page_id, attrs, attr_addr) -> bytes:
         return _long_lit(arg[1])
     if kind == 'expr':
         # ('expr', tuple) where tuple is something like ('coord', 'x', '+', ('attr', 'vvs0'))
-        # Emit each element in order.
+        # Emit each element in order. Bare strings that name a scratch
+        # sysvar (sya0/sya1) emit as the 5-byte operand; all other bare
+        # strings (operators, coord placeholders resolved upstream) emit
+        # as ASCII.
         out = bytearray()
         for piece in arg[1:][0]:  # arg[1] is the tuple, iterate its items
             if isinstance(piece, str):
-                out += piece.encode("ascii")
+                if piece in SYSVAR_OPERANDS:
+                    out += SYSVAR_OPERANDS[piece]
+                else:
+                    out += piece.encode("ascii")
             else:
                 out += _emit_arg(piece, x, y, w, h, comp_id, page_id, attrs, attr_addr)
         return bytes(out)
@@ -580,18 +604,35 @@ def _resolve_coord(name: str, x, y, w, h, comp_id, page_id, attrs) -> str:
     return str(int(v))
 
 
-def _emit_line(line: tuple, x, y, w, h, comp_id, page_id, attrs, attr_addr) -> bytes:
+def _emit_line(line: tuple, x, y, w, h, comp_id, page_id, attrs, attr_addr,
+               opcode_override: dict | None = None) -> bytes:
     """Emit a single length-prefixed bytecode block from a template
     line. Returns ``b''`` for templates we can't compile yet (control
-    flow, expression-heavy lines)."""
+    flow, expression-heavy lines).
+
+    ``opcode_override`` lets the caller swap individual opcode heads for
+    editor-version differences (e.g. ``setbrush`` is ``09 1c 08`` in the
+    nxt-1.65.1 toolchain that produced the project TFT, but ``09 1d 08``
+    in the 1.67.1 fixtures)."""
     mnemonic, args = line
-    if mnemonic in {"if", "lbrace", "rbrace", "rbrace_else", "assign", "comment"}:
+    if mnemonic in {"if", "lbrace", "rbrace", "rbrace_else", "comment"}:
         # These need the full script-bytecode compiler (gap #3).
         return b""
+    if mnemonic == "assign":
+        # A scratch-sysvar assignment (e.g. `sya0 = val * w / 100`). It has
+        # no opcode head — the entry is just the concatenated operand /
+        # operator pieces, starting with the LHS sysvar operand.
+        body = bytearray()
+        for a in args:
+            body += _emit_arg(a, x, y, w, h, comp_id, page_id, attrs, attr_addr)
+        return bytes(body)
     if mnemonic not in OPCODE:
         raise ValueError(f"unknown mnemonic: {mnemonic}")
+    head = OPCODE[mnemonic]
+    if opcode_override and mnemonic in opcode_override:
+        head = opcode_override[mnemonic]
     body = bytearray()
-    body += OPCODE[mnemonic]
+    body += head
     for a in args:
         body += _emit_arg(a, x, y, w, h, comp_id, page_id, attrs, attr_addr)
     return bytes(body)
@@ -634,6 +675,7 @@ def _draw3d_button_bevel(*, pressed: bool) -> tuple:
 def _encode_button_init(
     comp: "Component",
     attr_addr: Callable[[str], int],
+    opcode_override: dict | None = None,
 ) -> bytes:
     """Encode the button/button_t Ref event using if/else control flow.
 
@@ -682,7 +724,8 @@ def _encode_button_init(
     attrs = comp.attrs
 
     def emit(line: tuple) -> bytes:
-        return _emit_line(line, x, y, w, h, comp_id, page_id, attrs, attr_addr)
+        return _emit_line(line, x, y, w, h, comp_id, page_id, attrs, attr_addr,
+                          opcode_override=opcode_override)
 
     pressed_set = emit(_setbrush_buttoncolours(
         pressed=True, sta=sta, style=style, inline_spax_spay=True))
@@ -746,6 +789,7 @@ class Component:
 def encode_init_block(
     comp: Component,
     attr_addr: Callable[[str], int],
+    opcode_override: dict | None = None,
 ) -> bytes:
     """Return the concatenated length-prefixed init-bytecode blocks
     for one component's Ref event.
@@ -755,12 +799,17 @@ def encode_init_block(
     LOAD address in the per-page attribute-value region. This is
     the gap-#1 dependency.
 
+    ``opcode_override`` swaps individual opcode heads for editor-version
+    differences (see :func:`_emit_line`). The project TFT
+    (source/nextion.hmi.tft) needs ``{"setbrush": b"\\x09\\x1c\\x08"}``
+    because it was produced by the nxt-1.65.1 toolchain.
+
     Returns ``b""`` if the type has no Ref-event templates (Hotspot,
     Timer, Variable, Slider, Waveform, CropPicture).
     """
     label = TYPE_LABELS.get(comp.comp_type, "")
     if label in ("button", "button_t"):
-        return _encode_button_init(comp, attr_addr)
+        return _encode_button_init(comp, attr_addr, opcode_override=opcode_override)
 
     templates = ref_templates(comp.comp_type, comp.attrs)
     if not templates:
@@ -770,6 +819,7 @@ def encode_init_block(
         body = _emit_line(
             line, comp.x, comp.y, comp.w, comp.h,
             comp.comp_id, comp.page_id, comp.attrs, attr_addr,
+            opcode_override=opcode_override,
         )
         if not body:
             # Skip lines we can't compile yet (control flow).
