@@ -141,7 +141,7 @@ on an exact match; one fixture-backed test per verified block.
 Turning the byte-exact TFT→TFT round-trip into a real HMI→TFT compiler:
 read the `.HMI` and *generate* each region, replacing the "copy verbatim
 from TFT" spans one at a time while keeping the whole-file round-trip
-byte-identical. Test count 206 → 242.
+byte-identical. Test count 206 → 243.
 
 ### Regions now GENERATED from the HMI (byte-verified)
 
@@ -245,42 +245,41 @@ the corrections to wire up next:
 
 `scripts/lib/binattinf_generator.py` (`tests/sim/test_binattinf_generator.py`)
 generates a component's 24-byte-record block from HMI geometry/attrs + the
-media allocator's `objdatarampos`, following the rules above. **Pages 1 & 3
-(page + hotspot, lei 121/109) generate byte-exact end-to-end.** The
-display-component datafrom tables (59/116/106/1/98/51/52) are reversed
-(attposup/type/bounds/change per attr, in `DATAFROM_ATTRS`) but gated behind
-`allow_unverified=True` — three gaps remain before their whole blocks match:
+media allocator's `objdatarampos`. **Pages 1 & 3 (page + hotspot) generate
+byte-exact end-to-end**, and on page 2 the **Text and Button blocks are now
+byte-exact** too (literal sta/style/spax/spay records + txt_maxl + the
+inline-buffer txt merrylenth are all handled). The display-component tables
+(59/116/106/1/98/51/52) are gated behind `allow_unverified=True`. Remaining
+diffs are now narrow and precisely characterized:
 
-Concretely, page-2's 17 record diffs fall into three categories:
-
-- **Non-datafrom literal records I don't yet emit** — Text/Button carry
-  `sta`, `style`, `spax`, `spay` records that are `datafrom=False` and
-  store the *literal* attribute value (e.g. Text sta rec mem=1, max=2,
-  UU8; style mem=0, max=3; spax/spay mem=0, max=255). These are distinct
-  from the datafrom *render* attrs of the same name — a component can have
-  BOTH a literal-value record and a frame-offset record for an attr. The
-  generator must emit the literal records too (they sit at their own
-  layout offsets). Build a per-class "literal attr" table parallel to
-  `DATAFROM_ATTRS`.
 - **`att_changeid` (record byte +19)** — non-zero for the attributes a
   component's event scripts can mutate, numbered per a per-class editor
   enumeration that is NOT attposup order: Slider wid=1, hig=2, maxval=3,
-  minval=4, val=5; Timer tim=1, en=2. Needs the editor's per-class
-  changeable-attr ordering (reverse from `hmitype.dll` IL or more
-  fixtures). Every other record has att_changeid=0.
-- **`txt` / `txt_maxl` (Sstr coordinate system, me/miata-dash#8)** — the
-  `txt` record's `merrylenth` is the inline-buffer size (16 for Text, 11
-  for Button) NOT the Sstr datafenpei (4); its `attmemorypos` is a media-
-  frame offset (gen `3f04` vs live `3f10`). The paired `txt_maxl` Strlenth
-  record holds the capacity (mem 0xf=15 for a 16-byte buffer; max 0xfffe).
-  Needs the inline-buffer / `LongAttrAllocator` offsets wired in.
+  minval=4, val=5; Timer tim=1, en=2. This is the ONLY remaining diff on
+  page 2 (5 Slider records) and contributes the tim/en diffs on page 0.
+  Needs the editor's per-class changeable-attr ordering (reverse from
+  `hmitype.dll` IL or more fixtures). Every other record has chid=0.
+- **Variable (lei 52) specifics** — its records use
+  `frompageid=0xff, fromobjid=0xff` (sentinels, not the page/obj index —
+  Variables are page-global), and the block carries an extra `sta`-like
+  record at layout offset 7 that the generator emits empty. (35 of page-0's
+  39 diffs are the 7 Variables × 5 records.)
+- **Long-string spill (`txt` > inline buffer)** — s0 "Danger to
+  manifold!!" (20 > 16) spills into the media-frame tail; its `txt`
+  `attmemorypos` is the spill offset and `txt_maxl` the spill capacity,
+  the "Sstr>4 coordinate system" of me/miata-dash#8. (Page-0 txt/txt_maxl
+  diffs.) Strings that fit inline (every other txt) already match.
 
 ### Next concrete steps (dependency order)
 
-1. **Close the 3 binattinf gaps above** → pages 0 & 2 binattinf byte-exact.
-2. **Media blob per-object blocks + trailing page-init bytecode** — the
+1. **att_changeid enumeration** — pages 2 binattinf is byte-exact except 5
+   Slider records' chid; reverse the per-class changeable-attr ordering →
+   page 2 fully exact.
+2. **Variable sentinels + extra record** + **long-string spill** → page 0
+   binattinf byte-exact.
+3. **Media blob per-object blocks + trailing page-init bytecode** — the
    data after the name-hash header (the `09 22 08` page-init etc.).
-3. **Offset back-patch (item #3)** — fill objxinxi.init_off + 5 slots +
+4. **Offset back-patch (item #3)** — fill objxinxi.init_off + 5 slots +
    attstr_bytecode_offset, page-dir hexpos/attdataaddr_rel, and appinf1
    region pointers from the now-fixed layout.
 
