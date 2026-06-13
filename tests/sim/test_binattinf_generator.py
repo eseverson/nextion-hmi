@@ -115,3 +115,48 @@ def test_head_record_geometry_in_block():
     assert memval(9) == 420 and memval(10) == 260
     assert memval(11) == 60 and memval(12) == 60
     assert memval(13) == 420 + 60 - 1 and memval(14) == 260 + 60 - 1
+
+
+def _gen_component_block(hmi_page, ci, frompageid):
+    layout = layout_from_hmi_page(hmi_page)
+    hc = hmi_page.components[ci]
+    pa = hc.attrs
+    x = 0 if ci == 0 else int(pa.get("x") or 0)
+    y = 0 if ci == 0 else int(pa.get("y") or 0)
+    w = int(pa.get("w") or (480 if ci == 0 else 0))
+    h = int(pa.get("h") or (320 if ci == 0 else 0))
+    return build_component_binattinf(
+        hc.lei, hc.comp_id, x, y, w, h,
+        objdatarampos=layout.objdatarampos[ci],
+        frompageid=frompageid, fromobjid=ci,
+        authored=pa, allow_unverified=True,
+    )
+
+
+def _live_component_block(data, a1, pd, page_idx, ci):
+    from scripts.lib.tft_attrs_layout import PER_LEI_LAYOUT
+    strd = a1["strdataaddr"]
+    span = _page_binattinf_span(data, a1, pd, page_idx)
+    hmi = load_hmi_pages(HMI_PATH)
+    base = 0
+    for k in range(ci):
+        base += PER_LEI_LAYOUT[hmi[page_idx].components[k].lei][0]
+    stride = PER_LEI_LAYOUT[hmi[page_idx].components[ci].lei][0]
+    return span[base * 24:(base + stride) * 24]
+
+
+def test_page2_text_and_button_blocks_byte_exact():
+    """On page 2, the Text (ci3) and Button (ci4) binattinf blocks now
+    generate byte-exact (literal sta/style/spax/spay + txt_maxl + the
+    inline-buffer txt merrylenth are all handled).  The Slider block still
+    differs only in att_changeid (a separate documented gap)."""
+    data, a1 = _load()
+    pd = parse_page_directory(data, a1["pageadd"], a1["pageqyt"])
+    hmi = load_hmi_pages(HMI_PATH)
+
+    for ci in (3, 4):  # Text t0, Button b0
+        gen = _gen_component_block(hmi[2], ci, frompageid=2)
+        live = _live_component_block(data, a1, pd, 2, ci)
+        assert gen == live, (
+            f"page2 ci{ci} (lei {hmi[2].components[ci].lei}) block mismatch"
+        )

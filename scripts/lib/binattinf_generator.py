@@ -60,7 +60,13 @@ HEAD_FIELDS: list[tuple[str, str, int, int]] = [
 class DatafromAttr:
     """One RAM-backed (datafrom) attribute declaration for a component
     class: its in-frame ``attposup`` offset, storage type, value bounds,
-    and runtime-change flag."""
+    and runtime-change flag.
+
+    ``merrylenth_override`` forces the record's byte-stride field when it
+    differs from the type's natural ``datafenpei`` — used for ``txt``
+    (Sstr) whose record carries the inline-buffer size (16 Text / 11
+    Button) rather than the 4-byte Sstr stride.
+    """
 
     name: str
     attposup: int
@@ -68,6 +74,27 @@ class DatafromAttr:
     minval: int
     maxval: int
     change: bool
+    merrylenth_override: int | None = None
+
+
+@dataclass(frozen=True)
+class LiteralAttr:
+    """One non-RAM-backed (datafrom=False) attribute whose binattinf
+    record stores the *literal* authored value (e.g. Text/Button sta,
+    style, spax, spay, txt_maxl).  ``change=True`` like the head records.
+
+    ``value_key`` names the HMI attribute to read (defaults to ``name``);
+    ``default`` is used when the HMI omits it.  ``txt_maxl`` is special:
+    its value is the inline-buffer capacity minus 1 (computed by the
+    caller), so it uses ``value_key=None`` and the caller supplies it.
+    """
+
+    name: str
+    type_name: str
+    minval: int
+    maxval: int
+    value_key: str | None = None
+    default: int = 0
 
 
 # Per-class datafrom attribute tables, reversed from source/nextion.hmi.tft.
@@ -90,7 +117,7 @@ DATAFROM_ATTRS: dict[int, list[DatafromAttr]] = {
     109: [],  # Hotspot — no RAM-backed attrs (head + vscope only)
     59: [  # XFloat  (NOT yet whole-block verified — see VERIFIED_LEIS)
         DatafromAttr("sta", 0, "Select", 0, 2, True),
-        DatafromAttr("style", 1, "style", 0, 3, True),
+        DatafromAttr("style", 1, "Select", 0, 3, True),
         DatafromAttr("font", 5, "Fontid", 0, 1, False),
         DatafromAttr("bco", 6, "Color", 0, 65535, False),
         DatafromAttr("pco", 8, "Color", 0, 65535, False),
@@ -111,7 +138,7 @@ DATAFROM_ATTRS: dict[int, list[DatafromAttr]] = {
         DatafromAttr("xcen", 6, "Select", 0, 2, False),
         DatafromAttr("ycen", 7, "Select", 0, 2, False),
         DatafromAttr("pw", 8, "Select", 0, 1, False),
-        DatafromAttr("txt", 9, "Sstr", 0, 0, False),
+        DatafromAttr("txt", 9, "Sstr", 0, 0, False, merrylenth_override=16),
     ],
     106: [  # Prog
         DatafromAttr("sta", 0, "Select", 0, 1, True),
@@ -145,7 +172,7 @@ DATAFROM_ATTRS: dict[int, list[DatafromAttr]] = {
         DatafromAttr("xcen", 10, "Select", 0, 2, False),
         DatafromAttr("ycen", 11, "Select", 0, 2, False),
         DatafromAttr("isbr", 12, "Select", 0, 1, False),
-        DatafromAttr("txt", 13, "Sstr", 0, 0, False),
+        DatafromAttr("txt", 13, "Sstr", 0, 0, False, merrylenth_override=11),
     ],
     51: [  # Timer
         DatafromAttr("tim", 0, "UU16", 50, 65534, False),
@@ -153,6 +180,31 @@ DATAFROM_ATTRS: dict[int, list[DatafromAttr]] = {
     ],
     52: [  # Variable
         DatafromAttr("val", 0, "SS32", -2147483648, 2147483647, False),
+    ],
+}
+
+
+# Inline `txt` buffer capacity per type (bytes); the `txt_maxl` literal
+# record stores capacity-1, and the `txt` datafrom record's merrylenth is
+# this value when the string fits inline.
+INLINE_TXT_BUFFER: dict[int, int] = {116: 16, 98: 11, 53: 11}
+
+
+# Per-class non-datafrom literal records (value stored verbatim,
+# change=True, datafrom=False).  ``txt_maxl`` is appended automatically
+# for types in INLINE_TXT_BUFFER (capacity-1, Strlenth, max 65534).
+LITERAL_ATTRS: dict[int, list[LiteralAttr]] = {
+    116: [  # Text
+        LiteralAttr("sta", "Select", 0, 2, default=0),
+        LiteralAttr("style", "Select", 0, 3, default=0),
+        LiteralAttr("spax", "UU8", 0, 255, default=0),
+        LiteralAttr("spay", "UU8", 0, 255, default=0),
+    ],
+    98: [  # Button
+        LiteralAttr("sta", "Select", 0, 2, default=0),
+        LiteralAttr("style", "Select", 0, 4, default=0),
+        LiteralAttr("spax", "UU8", 0, 255, default=0),
+        LiteralAttr("spay", "UU8", 0, 255, default=0),
     ],
 }
 
@@ -196,16 +248,17 @@ def build_component_binattinf(
     objdatarampos: int,
     frompageid: int,
     fromobjid: int,
+    authored: dict | None = None,
     allow_unverified: bool = False,
 ) -> bytes:
     """Generate one component's binattinf block (stride * 24 bytes) from
-    its geometry + the media allocator's ``objdatarampos``.
+    its geometry + HMI attributes + the media allocator's ``objdatarampos``.
 
-    Only the byte-verified classes (:data:`VERIFIED_LEIS`) are emitted by
-    default; pass ``allow_unverified=True`` to emit one of the reversed-
-    but-not-whole-block-verified classes (its block will be close but not
-    guaranteed byte-exact until the att_changeid / txt_maxl / Sstr gaps
-    are closed)."""
+    ``authored`` carries the component's HMI attribute values (used for the
+    literal records — sta/style/spax/spay).  Only the byte-verified classes
+    (:data:`VERIFIED_LEIS`) are emitted by default; pass
+    ``allow_unverified=True`` to emit a reversed-but-not-whole-block-verified
+    class (the ``att_changeid`` enumeration gap may still differ)."""
     if lei not in DATAFROM_ATTRS:
         raise KeyError(
             f"no DATAFROM_ATTRS table for lei={lei}; reverse its RAM-backed "
@@ -214,28 +267,54 @@ def build_component_binattinf(
     if lei not in VERIFIED_LEIS and not allow_unverified:
         raise NotImplementedError(
             f"binattinf for lei={lei} is reversed but not yet whole-block "
-            f"verified (att_changeid / txt_maxl / Sstr gaps remain); pass "
+            f"verified (the att_changeid enumeration gap remains); pass "
             f"allow_unverified=True to emit it anyway"
         )
+    authored = authored or {}
     stride, offset_map = PER_LEI_LAYOUT[lei]
+
+    def mk(name, mem, mx, mn, type_name, *, change, datafrom,
+           merrylenth=None):
+        tv, df = ATTSHULEI_BY_NAME[type_name]
+        return AttRecord(
+            name=name, attmemorypos=mem, num_maxval=mx, num_minval=mn,
+            objdatarampos=objdatarampos, frompageid=frompageid,
+            fromobjid=fromobjid, str_encodeh_star=0, att_changeid=0,
+            typevalue=tv, datafenpei=(merrylenth if merrylenth is not None else df),
+            change=change, datafrom=datafrom, ispv=True, pp=True,
+        )
 
     records: dict[str, AttRecord] = {}
     records.update(_head_records(lei, comp_id, x, y, w, h,
                                  objdatarampos, frompageid, fromobjid))
     records["vscope"] = _vscope_record(objdatarampos, frompageid, fromobjid)
+
+    # datafrom (RAM-backed) render records: attmemorypos = frame offset.
     for da in DATAFROM_ATTRS[lei]:
-        tv, df = ATTSHULEI_BY_NAME[da.type_name]
-        records[da.name] = AttRecord(
-            name=da.name,
-            attmemorypos=objdatarampos + da.attposup,
-            num_maxval=da.maxval, num_minval=da.minval,
-            objdatarampos=objdatarampos, frompageid=frompageid,
-            fromobjid=fromobjid, str_encodeh_star=0, att_changeid=0,
-            typevalue=tv, datafenpei=df,
-            change=da.change, datafrom=True, ispv=True, pp=True,
+        records[da.name] = mk(
+            da.name, objdatarampos + da.attposup, da.maxval, da.minval,
+            da.type_name, change=da.change, datafrom=True,
+            merrylenth=da.merrylenth_override,
         )
 
-    # Place records at their layout offsets; empties are 24 zero bytes.
+    # Non-datafrom literal records (sta/style/spax/spay store HMI value).
+    for la in LITERAL_ATTRS.get(lei, []):
+        key = la.value_key or la.name
+        val = authored.get(key, la.default)
+        records[la.name] = mk(
+            la.name, int(val) if val is not None else 0,
+            la.maxval, la.minval, la.type_name,
+            change=True, datafrom=False,
+        )
+
+    # txt_maxl Strlenth literal record (capacity-1) for txt-bearing types.
+    if lei in INLINE_TXT_BUFFER:
+        cap = INLINE_TXT_BUFFER[lei]
+        records["txt_maxl"] = mk(
+            "txt_maxl", cap - 1, 65534, 0, "Strlenth",
+            change=True, datafrom=False,
+        )
+
     zero = b"\x00" * 24
     block = [zero] * stride
     for name, rec in records.items():
@@ -248,7 +327,10 @@ def build_component_binattinf(
 __all__ = [
     "HEAD_FIELDS",
     "DatafromAttr",
+    "LiteralAttr",
     "DATAFROM_ATTRS",
+    "LITERAL_ATTRS",
+    "INLINE_TXT_BUFFER",
     "VERIFIED_LEIS",
     "build_component_binattinf",
 ]
