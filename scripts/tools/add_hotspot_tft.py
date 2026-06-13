@@ -1,6 +1,17 @@
 #!/usr/bin/env python3
 """add_hotspot_tft.py — add a Hotspot to an existing .tft, directly.
 
+WARNING (me/nextion#3): this tool produces TFT files that pass CRC
+validation and load correctly in the simulator but are rejected by real
+NX4832F035 hardware with "check error" / "system data error". Structural
+splices (inserting objxinxi entries, shifting offsets, rewriting the page
+directory, growing allattbytes) are not byte-faithful to what the device's
+loader validates, even though all three CRCs are resealed correctly. Do
+NOT use this tool for real device flashing. Only same-length byte patches
+(``patch_tft.py --raw-offset``) are hardware-proven safe; structural
+changes must go through the real Nextion Editor or the issue #2
+from-scratch compiler.
+
 TFT-side counterpart to ``add_hotspot.py`` (which works on .HMI). Unlike
 the HMI version this writes the compiled artifact the device actually
 runs, so the Nextion Editor doesn't need to participate. Hotspots have
