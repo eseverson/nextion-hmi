@@ -251,21 +251,29 @@ display-component datafrom tables (59/116/106/1/98/51/52) are reversed
 (attposup/type/bounds/change per attr, in `DATAFROM_ATTRS`) but gated behind
 `allow_unverified=True` — three gaps remain before their whole blocks match:
 
+Concretely, page-2's 17 record diffs fall into three categories:
+
+- **Non-datafrom literal records I don't yet emit** — Text/Button carry
+  `sta`, `style`, `spax`, `spay` records that are `datafrom=False` and
+  store the *literal* attribute value (e.g. Text sta rec mem=1, max=2,
+  UU8; style mem=0, max=3; spax/spay mem=0, max=255). These are distinct
+  from the datafrom *render* attrs of the same name — a component can have
+  BOTH a literal-value record and a frame-offset record for an attr. The
+  generator must emit the literal records too (they sit at their own
+  layout offsets). Build a per-class "literal attr" table parallel to
+  `DATAFROM_ATTRS`.
 - **`att_changeid` (record byte +19)** — non-zero for the attributes a
   component's event scripts can mutate, numbered per a per-class editor
   enumeration that is NOT attposup order: Slider wid=1, hig=2, maxval=3,
   minval=4, val=5; Timer tim=1, en=2. Needs the editor's per-class
   changeable-attr ordering (reverse from `hmitype.dll` IL or more
   fixtures). Every other record has att_changeid=0.
-- **`txt_maxl` Strlenth + the second Sstr record** — Text/Button carry a
-  `txt_maxl` record (and a paired one) that the generator currently emits
-  as empty; the `txt` Sstr `attmemorypos` is a long-string region offset
-  (e.g. t0 gen `3f04` vs live `3f10`), the "Sstr>4 coordinate system" of
-  me/miata-dash#8. Needs the `LongAttrAllocator` wired into the per-page
-  media frame.
-- **`style` layout slot** — `PER_LEI_LAYOUT[59]` has no `style` offset, so
-  the XFloat datafrom `style` attr (attposup 1) can't be placed. Add the
-  missing slot to the layout table.
+- **`txt` / `txt_maxl` (Sstr coordinate system, me/miata-dash#8)** — the
+  `txt` record's `merrylenth` is the inline-buffer size (16 for Text, 11
+  for Button) NOT the Sstr datafenpei (4); its `attmemorypos` is a media-
+  frame offset (gen `3f04` vs live `3f10`). The paired `txt_maxl` Strlenth
+  record holds the capacity (mem 0xf=15 for a 16-byte buffer; max 0xfffe).
+  Needs the inline-buffer / `LongAttrAllocator` offsets wired in.
 
 ### Next concrete steps (dependency order)
 
