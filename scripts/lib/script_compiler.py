@@ -397,6 +397,13 @@ def compile_event_handler(source: str, ctx: CompileContext | None = None) -> byt
         if not line:
             continue
 
+        # A lone opening brace on its own line (editor-exported source puts
+        # `{` on the line after `if(...)` / `}else`). The frame was already
+        # pushed when the `if`/`else`/`while`/`for` header was seen, so the
+        # brace is a no-op for the compiler.
+        if line == "{":
+            continue
+
         # --- control-flow dispatch -----------------------------------------
         m = _IF_RE.match(line)
         if m:
