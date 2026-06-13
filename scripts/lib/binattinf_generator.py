@@ -106,16 +106,14 @@ class LiteralAttr:
 # Per-class datafrom attribute tables, reversed from source/nextion.hmi.tft.
 # Order doesn't matter (records are placed by name via PER_LEI_LAYOUT).
 # Component classes whose binattinf block is byte-verified against
-# source/nextion.hmi.tft end-to-end.  121/109 (page+hotspot) and the
-# page-2 set — Slider (1), Text (116), Button (98) — all generate whole
-# blocks byte-exact (att_changeid, literal records, txt buffer all wired).
-# XFloat (59) / Prog (106) / Timer (51) / Variable (52) tables are reversed
-# but their whole blocks aren't yet verified end-to-end on a page (Variable
-# needs the 0xff sentinels + extra record; XFloat/Prog/Timer await a
-# page-0 pass once the Variable + long-string gaps close).
-# build_component_binattinf raises for an unverified lei unless
-# allow_unverified=True.
-VERIFIED_LEIS = frozenset({121, 109, 1, 116, 98})
+# source/nextion.hmi.tft end-to-end.  Every component class in the project
+# — Page(121), Hotspot(109), XFloat(59), Text(116), Prog(106), Slider(1),
+# Button(98), Timer(51), Variable(52) — now generates its whole binattinf
+# block byte-exact: all 4 pages reproduce byte-for-byte (att_changeid,
+# literal records, txt inline/spill buffer, the Variable 0xff sentinels +
+# sta record are all wired).  build_component_binattinf still raises for a
+# lei outside this set unless allow_unverified=True.
+VERIFIED_LEIS = frozenset({121, 109, 1, 116, 98, 59, 106, 51, 52})
 
 
 DATAFROM_ATTRS: dict[int, list[DatafromAttr]] = {
@@ -215,7 +213,39 @@ LITERAL_ATTRS: dict[int, list[LiteralAttr]] = {
         LiteralAttr("spax", "UU8", 0, 255, default=0),
         LiteralAttr("spay", "UU8", 0, 255, default=0),
     ],
+    52: [  # Variable
+        LiteralAttr("sta", "Select", 0, 1, default=0),
+    ],
 }
+
+
+# Component classes whose binattinf records use the 0xff/0xff
+# frompageid/fromobjid sentinels (page-global components) rather than the
+# page/object index.  Variables (lei 52) are page-global.
+SENTINEL_FROM_LEIS = frozenset({52})
+
+
+def _round4(n: int) -> int:
+    return (n + 3) & ~3
+
+
+def _txt_merrylenth(inline_buffer: int, txt) -> int:
+    """The ``txt`` Sstr record's ``merrylenth`` (and ``txt_maxl`` = this
+    minus 1) for a component with the given inline buffer capacity.
+
+    * String fits inline (``len+1 <= inline_buffer``): merrylenth =
+      ``inline_buffer`` (e.g. Text 16).
+    * String spills (``len+1 > inline_buffer``): the editor allocates a
+      tail of ``round4(len+1)`` bytes in the media frame and the record's
+      capacity becomes ``inline_buffer + round4(len+1) + 1`` (verified on
+      s0 "Danger to manifold!!" = 20 → 16 + 24 + 1 = 41, txt_maxl = 40).
+    """
+    if not isinstance(txt, str):
+        return inline_buffer
+    blen = len(txt.encode("latin-1", "replace"))
+    if blen + 1 <= inline_buffer:
+        return inline_buffer
+    return inline_buffer + _round4(blen + 1) + 1
 
 
 def _head_records(lei, comp_id, x, y, w, h, objdatarampos, frompageid,
@@ -282,6 +312,12 @@ def build_component_binattinf(
     authored = authored or {}
     stride, offset_map = PER_LEI_LAYOUT[lei]
 
+    # Page-global components (Variable) tag every record with 0xff/0xff
+    # frompageid/fromobjid sentinels instead of the page/object index.
+    if lei in SENTINEL_FROM_LEIS:
+        frompageid = 0xFF
+        fromobjid = 0xFF
+
     def mk(name, mem, mx, mn, type_name, *, change, datafrom,
            merrylenth=None, changeid=0):
         tv, df = ATTSHULEI_BY_NAME[type_name]
@@ -298,12 +334,23 @@ def build_component_binattinf(
                                  objdatarampos, frompageid, fromobjid))
     records["vscope"] = _vscope_record(objdatarampos, frompageid, fromobjid)
 
+    # txt buffer capacity (merrylenth field for the txt Sstr record) — the
+    # inline buffer when the string fits, else inline + round4(len+1) + 1
+    # when it spills into the media-frame tail (see _txt_merrylenth).
+    txt_merrylenth = None
+    if lei in INLINE_TXT_BUFFER:
+        txt_merrylenth = _txt_merrylenth(
+            INLINE_TXT_BUFFER[lei], authored.get("txt"))
+
     # datafrom (RAM-backed) render records: attmemorypos = frame offset.
     for da in DATAFROM_ATTRS[lei]:
+        merrylenth = da.merrylenth_override
+        if da.name == "txt" and txt_merrylenth is not None:
+            merrylenth = txt_merrylenth
         records[da.name] = mk(
             da.name, objdatarampos + da.attposup, da.maxval, da.minval,
             da.type_name, change=da.change, datafrom=True,
-            merrylenth=da.merrylenth_override, changeid=da.changeid,
+            merrylenth=merrylenth, changeid=da.changeid,
         )
 
     # Non-datafrom literal records (sta/style/spax/spay store HMI value).
@@ -316,11 +363,10 @@ def build_component_binattinf(
             change=True, datafrom=False,
         )
 
-    # txt_maxl Strlenth literal record (capacity-1) for txt-bearing types.
-    if lei in INLINE_TXT_BUFFER:
-        cap = INLINE_TXT_BUFFER[lei]
+    # txt_maxl Strlenth literal record (txt capacity - 1).
+    if txt_merrylenth is not None:
         records["txt_maxl"] = mk(
-            "txt_maxl", cap - 1, 65534, 0, "Strlenth",
+            "txt_maxl", txt_merrylenth - 1, 65534, 0, "Strlenth",
             change=True, datafrom=False,
         )
 
