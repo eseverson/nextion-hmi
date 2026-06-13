@@ -45,13 +45,40 @@ on an exact match; one fixture-backed test per verified block.
   XFloat(59, 96 B), Text(116, 104 B) all match the live blocks.
   Slider(1)/Timer(51)/Variable(52) confirmed empty. Locked in
   `tests/sim/test_init_encoder_corpus.py`.
-- **STEP 4 — Region assemblers + whole-file writer. RECON DONE,
-  IMPLEMENTATION NOT STARTED — flagged for escalation.** The individual
-  blocks all compile byte-exactly (STEPs 1-3); the remaining work is
-  assembling them in the correct byte order across the whole file and
-  back-patching every cross-reference. Reconnaissance findings (mapped
-  directly off `source/nextion.hmi.tft`, usercode region = strd 0x70000
-  .. file_end):
+- **STEP 4/5 — Region assemblers + whole-file writer. DONE** (this
+  pass). The usercode region assembler
+  ([`scripts/lib/usercode_assembler.py`](../scripts/lib/usercode_assembler.py))
+  stitches the STEP 1-3 block encoders into the whole region byte-for-byte
+  and the whole `source/nextion.hmi.tft` round-trips byte-identically.
+  Locked in `tests/sim/test_usercode_assembler.py` (7 tests):
+
+  - **Per-page event-block region** re-emits byte-exact for all 4 pages
+    via the per-type `EVENT_LAYOUT` table (Page 121, XFloat 59, Text 116,
+    Prog 106, Hotspot 109, Slider 1, Button 98, Timer 51, Variable 52).
+    Each component expands into a fixed ordered op stream of chain bodies
+    (each + terminator) interleaved with event-NAME strings; absent slots
+    (e.g. a Hotspot's missing init) still contribute their terminator.
+  - **`S`/`L` label allocator — RESOLVED.** The pinned blocker is cracked:
+    `L.addr == (S length-prefix offset) + 4 + 7` = the usercode offset of
+    the byte immediately after the S marker payload (the handler body
+    entry). `patch_l_markers` recomputes it from the layout and reproduces
+    the project's single L (`0x0d90`, paired with `S 0x0f71fd`) exactly.
+    The `S` biaoji itself is the editor's monotonic global label key —
+    NOT content-derivable — so it is captured as a per-handler constant
+    (`PROJECT_S_BIAOJI = 0x0F71FD`); suspend/resume parity needs it, a
+    cold-start-only project can emit 0.
+  - **Whole usercode region** (strdataaddr..pageadd, 0x9034 B) reassembles
+    byte-exact: header (global dir + name-hash + MainCode) + per page
+    (event region immediately followed by its `hexpos` media blob) + tail
+    (AppAllvas + binattinf attr records). Media blobs / AppAllvas / attr
+    records are placed verbatim — authoring their *contents* from scratch
+    is items 2c/3/§"Per-page private allocator", not the assembler's job.
+  - **Whole-file round-trip** byte-identical: reassembled usercode in
+    place + verbatim H1/H2/resources/page-dir/objxinxi + resealed H1/H2/
+    trailing CRCs == the reference TFT.
+
+  Original reconnaissance (mapped directly off `source/nextion.hmi.tft`,
+  usercode region = strd 0x70000 .. file_end):
 
   **Usercode emission order (verified by region map):**
   1. **Global memory directory** at usercode +0x00: a 0x48-byte TLV
@@ -98,10 +125,16 @@ on an exact match; one fixture-backed test per verified block.
     `h2_trailing.py`); wiring them over freshly-assembled regions is
     mechanical but unverified as a whole.
 
-  **Recommendation:** escalate the whole-file assembler to a stronger
-  model resuming from this committed state. The byte-exact block
-  encoders (STEPs 1-3, locked by tests) are the inputs; the assembler's
-  riskiest sub-task is reproducing the `S`/`L` label allocator numbering.
+  **Status update (this pass):** the assembler is implemented and the
+  whole file round-trips byte-identically; see the STEP 4/5 DONE block
+  above. The one residual non-derivable input is the `S` biaoji label
+  key (captured as a constant). Remaining genuine from-scratch work is
+  authoring the verbatim spans' *contents* (media blobs / AppAllvas /
+  binattinf records) rather than the assembly — tracked under items 2/3
+  and §"Per-page private allocator".
+
+  Three CRCs + H1/H2 framing are wired over the freshly-assembled file
+  and verified (`test_whole_file_round_trip_byte_identical`).
 
 ## 1. Script compiler — open work
 
