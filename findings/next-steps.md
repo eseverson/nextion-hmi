@@ -136,6 +136,96 @@ on an exact match; one fixture-backed test per verified block.
   Three CRCs + H1/H2 framing are wired over the freshly-assembled file
   and verified (`test_whole_file_round_trip_byte_identical`).
 
+## HMI→TFT compiler — me/nextion#2 progress (2026-06-13)
+
+Turning the byte-exact TFT→TFT round-trip into a real HMI→TFT compiler:
+read the `.HMI` and *generate* each region, replacing the "copy verbatim
+from TFT" spans one at a time while keeping the whole-file round-trip
+byte-identical. Test count 206 → 223.
+
+### Regions now GENERATED from the HMI (byte-verified)
+
+- **Event-region structure** — `scripts/lib/hmi_model.py`
+  (`tests/sim/test_hmi_model.py`). `load_hmi_pages` reads the HMI into
+  device-id-ordered page models (page pseudo-component prepended).
+  Component *order*, `lei`, and the per-type slot set drive
+  `usercode_assembler` instead of TFT-parsed objxinxi. Verified: the HMI
+  component count + `lei` match objxinxi one-for-one, and the assembled
+  event region is byte-exact per page. Key finding: the populated
+  objxinxi slot set is constant per `lei` (the editor synthesises every
+  layout slot regardless of which `codes*` scripts exist) — so the
+  structure is a pure function of `lei`; the HMI events change a slot's
+  *content*, not which slots exist.
+- **Hotspot navigation bytecode** — the HMI `codesdown` ("page N") script
+  compiles into the RELEASE slot (slot 2) via `compile_event_handler`,
+  byte-exact against all 4 hotspots. No attribute table needed (only the
+  `page` opcode + page-id literal). The press slot (1) is an
+  auto-generated highlight fill, NOT a `codes*` script.
+- **AppAllvas table** — `build_appallvas(program_s)` generates the
+  global-int `(name_hash_LE, byte_offset, type=SS32)` records from
+  `Program.s`'s `int` declarations. Records are hash-sorted ascending;
+  offsets follow declaration order (sys0=0, sys1=4, sys2=8). Byte-exact.
+  (`attdataaddr` in appinf1 is strd-relative and = the first page's
+  binattinf start = the AppAllvas end.)
+- **objxinxi entry frame** — `scripts/lib/objxinxi_encoder.py`
+  (`tests/sim/test_objxinxi_encoder.py`). Generates lei, id, the +2/+32/
+  +36 header constants, the **+3 per-class type-flag** (0x37 visible /
+  0x27 Timer / 0x07 Variable), and geometry (x/y/w/h/endx/endy, with a
+  1×1-at-origin default for non-visual Timer/Variable). All 39 entries
+  byte-exact when the allocator/back-patch fields are supplied as inputs.
+  Finding: `+52` (attstr_bytecode_offset) == `init_off` ONLY when a slot-0
+  init block exists; when slot 0 is absent (Hotspot/Timer/Variable) it is
+  a distinct offset (Hotspot: first event chain's length-prefix; Variable:
+  just before the page media blob), so it is a separate back-patch input.
+- **Page directory framing** — `scripts/lib/page_dir_encoder.py`
+  (`tests/sim/test_page_dir_encoder.py`). Generates `objstar` (cumulative
+  object count) + `objqyt` (per-page count) + `res0`=0; the three
+  strdata-relative offsets (`hexpos`/`attdataaddr_rel`/`medatapos`) are
+  allocator/layout inputs. Whole directory byte-exact.
+
+### Still COPIED verbatim from the reference TFT
+
+- Per-page **media blobs** (the `hexpos` private-memory images).
+- The full **binattinf record values** (the `attmemorypos`/max/min/
+  objdatarampos fields per attribute) and the per-component **attstr
+  88-slot tables** (the objxinxi→record-index mapping).
+- The objxinxi **offset fields** (init_off, the 5 event slots,
+  objdatarampos, attstr_bytecode_offset) and the page-dir offsets.
+- The resources region (fonts/pictures, 0x10000–0x70000) — OUT OF SCOPE.
+
+### THE keystone blocker — per-page media allocator (`objdatarampos`)
+
+Generating the media blobs, the binattinf record `objdatarampos`/value
+fields, the objxinxi `objdatarampos` + offset fields, the attstr slot
+tables, and the page-dir offsets all converge on ONE missing piece: the
+editor's **per-page private-memory allocator** that lays out each page's
+media blob and assigns every component its `objdatarampos`.
+
+Reconnaissance (page-1 "gauge", the simplest page — page + hotspot, 51-byte
+blob): the media blob is `<u32 0x0c> <16-byte well-known name-hash table
+(2691ed33 …)>` then per-object blocks at `objdatarampos` (page=0x14,
+hotspot=0x1c) then trailing init bytecode (`09 22 08 …`). `memory_allocator.py`
+T1 already computes *public-memory* frame offsets (`frame_offset`), but NOT
+the blob *image* (header + hash table + per-block content bytes + alignment)
+nor the `objdatarampos` cursor that the binattinf/objxinxi records reference.
+That image-builder is the next thing to reverse — it unblocks items 2c
+(media blobs), the rest of #2 (binattinf values, attstr tables), and #3
+(absolute offset back-patching, which needs the layout fixed first).
+
+### Next concrete steps (dependency order)
+
+1. **Per-page media allocator / blob image builder** — produce the
+   `hexpos` blob + every component's `objdatarampos` from the HMI page
+   model. Start from page 1 (page+hotspot) and grow to the others.
+2. **binattinf values** — once `objdatarampos` is known, feed it +
+   the HMI attribute values into `tft_attrs_encoder.build_component_block`
+   to generate the record values and the attstr slot tables; verify
+   per-page byte-exact (page 1 first).
+3. **Offset back-patch (item #3)** — with regions generated rather than
+   copied, run a second pass to fill objxinxi.init_off + 5 slots +
+   attstr_bytecode_offset, page-dir hexpos/attdataaddr_rel/medatapos, and
+   appinf1 region pointers from the fixed layout.
+
 ## 1. Script compiler — open work
 
 The integration is now in place:
