@@ -124,18 +124,18 @@ SIZEOF_OBJDATA_T1: Dict[int, int] = {
     5:    4,   # Touchcap                — Touchcap_PARAM
     51:   4,   # Timer                   — Timer_PARAM
     52:   4,   # Vari (Variable)         — Vari_PARAM_tk (just `val` u32)
-    53:  13,   # Button_T (touch Button) — Button_T_PARAM_tk (pack=1, 13 raw bytes)
+    53:  24,   # Button_T (touch Button) — Button_T_PARAM_tk (13 fields + 11-byte txt buf → ceil4=24; byte-verified via 17.tft page-3 stride)
     55:  36,   # GText (ScrollingText in attribute-records.md) — GText_PARAM
     56:  12,   # CheckBox                — CheckBox_PARAM
     57:   8,   # Radio                   — Radio_PARAM
     58:  16,   # Qrcode                  — Qrcode_PARAM
     59:  24,   # XFloat                  — Xfloat_PARAM
-    98:  13,   # Button                  — Button_PARAM_tk (pack=1, 13 raw bytes)
+    98:  24,   # Button                  — Button_PARAM_tk (13 fields + 11-byte txt buf → ceil4=24; byte-verified via 17.tft page-2 stride)
     106:  8,   # Prog (ProgressBar)      — Prog_PARAM
     109:  0,   # Hotspot (Touch)         — empty array; no block allocated
     112:  4,   # Pic                     — Pic_PARAM (single Picid)
     113:  8,   # Picc (CropPicture)      — Picc_PARAM
-    116:  9,   # Text                    — Text_PARAM_tk (pack=1, 9 raw bytes)
+    116: 28,   # Text                    — Text_PARAM_tk (9 fields + 16-byte txt buf → ceil4=28; byte-verified via miata-dash+17.tft page-2 stride)
     121:  8,   # Page                    — Page_PARAM (4 navigation u8s + sta + Pic)
     122: 24,   # Zhizhen (Gauge)         — Zhizhen_PARAM
 }
@@ -287,7 +287,8 @@ ATTPOSUP_TABLE_T1: Dict[int, Dict[str, int]] = {
     },
     53: {  # Button_T (touch Button) — GuiObjButton_T
         # sta / style / borderc / borderw / txt_maxl / spax / spay = -1 → omitted.
-        # txt = 65548 (Sstr indirect) → omitted.
+        # txt IL sentinel = 65548 (= 65535 + 13); actual attposup = 13 (Sstr inline buf at struct+13).
+        # Same struct layout as Button (98). Byte-verified SIZEOF=24 via 17.tft page-3 stride.
         "font":  0,
         "val":   1,
         "pic":   2, "picc": 2, "bco":  2,
@@ -297,6 +298,7 @@ ATTPOSUP_TABLE_T1: Dict[int, Dict[str, int]] = {
         "xcen": 10,
         "ycen": 11,
         "isbr": 12,
+        "txt":  13,
     },
     55: {  # GText / SLText (LEI 55 mapping is ambiguous; see notes below).
         # Using GText layout (matches existing tft_attrs_layout.PER_LEI_LAYOUT[55]).
@@ -363,7 +365,8 @@ ATTPOSUP_TABLE_T1: Dict[int, Dict[str, int]] = {
     },
     98: {  # Button — GuiObjButton (same on-disk layout as Button_T_PARAM_tk)
         # sta / style / borderc / borderw / txt_maxl / spax / spay = -1 → omitted.
-        # txt = 65548 → omitted.
+        # txt IL sentinel = 65548 (= 65535 + 13); actual attposup = 13 (Sstr inline buf at struct+13).
+        # Byte-verified: all scalar offsets + txt=13 from miata-dash+17.tft binattinf.
         "font":  0,
         "val":   1,
         "pic":   2, "picc": 2, "bco":  2,
@@ -373,6 +376,7 @@ ATTPOSUP_TABLE_T1: Dict[int, Dict[str, int]] = {
         "xcen": 10,
         "ycen": 11,
         "isbr": 12,
+        "txt":  13,
     },
     106: { # Prog (ProgressBar) — GuiObjProg
         "sta":  0,
@@ -390,9 +394,10 @@ ATTPOSUP_TABLE_T1: Dict[int, Dict[str, int]] = {
         # vvs0 / vvs1 = -1 in F-series → not allocated.
         "picc": 0,
     },
-    116: { # Text — GuiObjText (uses Text_PARAM_tk, 9 bytes)
+    116: { # Text — GuiObjText (uses Text_PARAM_tk, 28 bytes)
         # sta / style / key / borderc / borderw / txt_maxl / spax / spay = -1 → omitted.
-        # txt = 65544 → omitted.
+        # txt IL sentinel = 65544 (= 65535 + 9); actual attposup = 9 (Sstr inline buf at struct+9).
+        # Byte-verified: all scalar offsets from miata-dash+17.tft binattinf; txt=9 from both fixtures.
         "font":  0,
         "isbr":  1,
         "pco":   2,
@@ -400,6 +405,7 @@ ATTPOSUP_TABLE_T1: Dict[int, Dict[str, int]] = {
         "xcen":  6,
         "ycen":  7,
         "pw":    8,
+        "txt":   9,
     },
     121: { # Page — GuiObjPage
         "up":    0,
@@ -628,15 +634,17 @@ if __name__ == "__main__":
             )
 
     # 4-byte alignment test: lay out a small page and verify cursor jumps.
+    # SIZEOF_OBJDATA_T1: Button(98)=24 (already 4-aligned), Text(116)=28 (already 4-aligned).
+    # Byte-verified strides from miata-dash source/nextion.hmi.tft page-2 and 17.tft page-2/3.
     t1 = MemoryAllocator(app_allvas_qty=0, series="T1")
     t1.add_object(121, "page0")   # 8 bytes (Page_PARAM, already 4-aligned)
     assert t1.cursor == 8
     t1.add_object(59, "x9")        # 24 bytes (Xfloat_PARAM)
     assert t1.cursor == 8 + 24, f"cursor={t1.cursor}"
-    t1.add_object(98, "b0")        # 13 bytes (Button_PARAM_tk) → aligned to 16
-    assert t1.cursor == 8 + 24 + 16, f"cursor={t1.cursor}"
-    t1.add_object(116, "t0")       # 9 bytes (Text_PARAM_tk) → aligned to 12
-    assert t1.cursor == 8 + 24 + 16 + 12, f"cursor={t1.cursor}"
+    t1.add_object(98, "b0")        # 24 bytes (Button_PARAM_tk incl. txt buf, already 4-aligned)
+    assert t1.cursor == 8 + 24 + 24, f"cursor={t1.cursor}"
+    t1.add_object(116, "t0")       # 28 bytes (Text_PARAM_tk incl. txt buf, already 4-aligned)
+    assert t1.cursor == 8 + 24 + 24 + 28, f"cursor={t1.cursor}"
 
     # Frame offsets through the table:
     # x9.memorypos = 8 (after Page_PARAM 8 bytes); val_attposup = 12.
@@ -645,8 +653,8 @@ if __name__ == "__main__":
     assert t1.frame_offset("page0", "sta") == 0 + 4
     # b0.memorypos = 8 + 24 = 32; val_attposup = 1.
     assert t1.frame_offset("b0", "val") == 32 + 1
-    # t0.memorypos = 32 + 16 (Button block padded) = 48; pco_attposup = 2.
-    assert t1.frame_offset("t0", "pco") == 48 + 2
+    # t0.memorypos = 32 + 24 (Button SIZEOF=24) = 56; pco_attposup = 2.
+    assert t1.frame_offset("t0", "pco") == 56 + 2
 
     # XFloat val differs T0 (+5) vs T1 (+12) — sanity confirm both tables
     # are honored independently:

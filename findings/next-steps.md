@@ -40,15 +40,22 @@ allocator-driven resolution, and a 4-way elif cascade.
   [`text-setbrush-variant.md`](text-setbrush-variant.md)) of each
   `GuiObj<Kind>.GetAtts_WithNoHead` method in the decompiled
   `hmitype.dll` IL.
-  - **Byte-verified**: T0 XFloat (val=+5) and Vari (val=+0) only.
-  - **IL-only (unverified against a byte-decoded F-series fixture)**:
-    all entries in `ATTPOSUP_TABLE_T1`. The Slider entry (val=+10)
-    cross-matches the `0x44a + 10 = 0x454` reference in
-    [`memory-allocation.md`](memory-allocation.md) § "Worked example",
-    so it has indirect support but isn't end-to-end byte-checked
-    through the allocator yet. A round-trip fixture (e.g.
-    `17_more_components`) should be used to byte-verify the F-series
-    block layout before relying on the table for emit-side authoring.
+  - **Byte-verified (2026-06-12)**: `ATTPOSUP_TABLE_T1` scalar entries
+    for XFloat(59), Page(121), Prog(106), Timer(51), Text(116),
+    Button(98), Slider(1) — all confirmed from `binattinf`
+    `datafrom=True` records in `source/nextion.hmi.tft` (miata-dash)
+    and `17_more_components/17.tft`. `txt` (Sstr) entries added for
+    Text(116, attposup=9), Button(98, attposup=13), Button_T(53,
+    attposup=13); IL sentinels 65544/65548 decode to `65535 + actual`.
+  - **`SIZEOF_OBJDATA_T1` corrected (2026-06-12)**: Text(116) 9→28,
+    Button(98) 13→24, Button_T(53) 13→24. The IL extracted only
+    the raw struct-field bytes; the inline Sstr buffers (txt capacity
+    16 bytes for Text, 11 bytes for Button/Button_T) are also part
+    of the block. Byte-verified from page-2 objdatarampos strides in
+    both fixtures; all 170 tests + init-encoder self-tests pass.
+  - **Still IL-only**: Curve(0), Touchcap(5), GText(55), CheckBox(56),
+    Radio(57), Qrcode(58), Pic(112), Picc(113), Zhizhen(122) attposup
+    entries not yet checked against a byte-decoded fixture.
 - **Widen the round-trip corpus.** Current byte-verified pairs come
   from `16_loop` (if-else and while). The miata-dash Timer event
   source (in `nextion/work/hmi_text/main.txt`) and Hotspot Touch-Press
