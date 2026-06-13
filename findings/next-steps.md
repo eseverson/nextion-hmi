@@ -13,6 +13,96 @@ documented elsewhere; the most relevant cross-references:
 - [`format-hmi.md`](format-hmi.md#attribute-record-format-inside-a-component-hmi-side)
   — per-component attribute record typebyte encoding.
 
+## From-scratch `nextion.hmi.tft` emit — 5-step plan status
+
+Goal: emit `nextion.hmi.tft` byte-for-byte from `nextion.hmi.HMI` on
+Linux. Discipline: emit → byte-diff against the live TFT → only advance
+on an exact match; one fixture-backed test per verified block.
+
+- **STEP 1 — ATTPOSUP/SIZEOF byte-verification. DONE** (commit
+  `5dfd4a4`). `ATTPOSUP_TABLE_T1` scalar offsets verified from
+  `binattinf` `datafrom=True` records; `SIZEOF_OBJDATA_T1` corrected
+  for Text(116)=28, Button(98)=24, Button_T(53)=24 (the IL extracted
+  only raw struct fields, omitting the inline Sstr txt buffers). Key
+  finding: Sstr buffers are stored *inline* in the per-component block;
+  long txts spill into a `LongAttrAllocator` tail after all struct
+  blocks. IL sentinels ≥ 65535 decode as `65535 + actual_attposup`.
+- **STEP 2 — Script-compiler corpus. DONE** (commit `27607c4`). The
+  full 9-chain tm0 codestimer (if/else-if/else cascades, a `||`
+  condition, `sys0=x7.val-x4.val`) compiles byte-for-byte (806-byte
+  body) against the live TFT, as do all four pages' Hotspot
+  Touch-Release `page N` navigation. `compile_event_handler` now
+  tolerates lone `{` lines (editor-exported style). The leading
+  `S <addr>` suspend/resume marker is excluded (its addr is a global
+  label index patched at output time). Locked in
+  `tests/sim/test_script_compiler_corpus.py`.
+- **STEP 3 — Init-encoder gaps. DONE** (commit `4b9d953`). Prog(106,
+  dir=0) dir=0 template now emits real bytecode (was literal ASCII
+  placeholders) — 83 B exact. setbrush opcode is editor-version
+  dependent: project TFT (nxt-1.65.1) uses `09 1c 08`, the
+  17_more_components fixtures (1.67.1) use `09 1d 08`; added an
+  `opcode_override` param. With it, Button(98) sta=1/style=4 (305 B),
+  XFloat(59, 96 B), Text(116, 104 B) all match the live blocks.
+  Slider(1)/Timer(51)/Variable(52) confirmed empty. Locked in
+  `tests/sim/test_init_encoder_corpus.py`.
+- **STEP 4 — Region assemblers + whole-file writer. RECON DONE,
+  IMPLEMENTATION NOT STARTED — flagged for escalation.** The individual
+  blocks all compile byte-exactly (STEPs 1-3); the remaining work is
+  assembling them in the correct byte order across the whole file and
+  back-patching every cross-reference. Reconnaissance findings (mapped
+  directly off `source/nextion.hmi.tft`, usercode region = strd 0x70000
+  .. file_end):
+
+  **Usercode emission order (verified by region map):**
+  1. **Global memory directory** at usercode +0x00: a 0x48-byte TLV
+     header — `u32 total_size(=0x48)` then `(kind,val)` u32 pairs:
+     `(3,0x1c) (4,0x20) (0x10,0x30) (0x18,0)`. (kind = AppAllvasQty=3,
+     etc.; exact field semantics still loose.)
+  2. **Name-hash tables** at +0x30: the well-known 4-entry table
+     (`26 91 ed 33 …`) — see component-name-hashes.md.
+  3. **MainCodeHex / Program.s bytecode** at +0x4c.
+  4. **Per-component blocks**, in objxinxi order (= page order). For
+     each component, contiguously:
+       a. slot-0 "Ref" event block-chain (THIS IS the init bytecode —
+          `objxinxi.init_off == event_slot[0]`, verified equal for
+          every component), terminated by `00 00 00 00`.
+       b. each further active event slot's block-chain, each terminated
+          by `00 00 00 00`.
+       c. that component's event-NAME strings as length-prefixed
+          entries (`04 00 00 00 "down"`, `02 00 00 00 "up"`), each
+          followed by `00 00 00 00`.
+     Page-pseudo and Variable components contribute only (a). The
+     26-byte "gaps" in a naive block walk are exactly (b)+(c)+terminators.
+
+  **The genuine unknowns / hard parts for the writer:**
+  - **Absolute offset back-patching.** Every `objxinxi.init_off` and the
+    6 event slots store usercode-relative offsets that are only known
+    after the full layout is fixed — a second pass. Same for the page
+    directory `hexpos`/`attdataaddr_rel` and `appinf1`'s region
+    pointers.
+  - **The `S <addr>` / `L <addr>` label values.** The tm0 timer block
+    opens with `53 20 03 fd 71 0f 00` (addr 0x0f71fd) — NOT a file
+    offset (out of range as strd-rel). It is the global label-table
+    `biaoji` key the editor's `Makestrsbytes` assigns and patches at
+    output time (see script-control-flow.md "L <addr> opcode"). To be
+    byte-exact the writer must reproduce that label allocator's numbering;
+    its exact sequence is not yet reversed. This is the single most
+    likely source of unresolved diffs.
+  - **Per-page media blob ordering** (the `hexpos` region): header
+    (`ceil4(num_objs+16)`) → component struct blocks (STEP-1 SIZEOFs) →
+    LongAttr Sstr tail → page event-name table. Block-internal layout is
+    understood; the cross-region cursor math has not been assembled end
+    to end.
+  - **Three CRCs + H1/H2 framing.** The page-CRC, dir-CRC, and trailing
+    CRC encoders already exist (`page_crc.py`, `directory-checksum.md`,
+    `h2_trailing.py`); wiring them over freshly-assembled regions is
+    mechanical but unverified as a whole.
+
+  **Recommendation:** escalate the whole-file assembler to a stronger
+  model resuming from this committed state. The byte-exact block
+  encoders (STEPs 1-3, locked by tests) are the inputs; the assembler's
+  riskiest sub-task is reproducing the `S`/`L` label allocator numbering.
+
 ## 1. Script compiler — open work
 
 The integration is now in place:
