@@ -6,3 +6,7 @@ __pycache__/
 .worktrees/
 .claude/
 work/
+
+# Test/fixture/oracle display files — proprietary, never in the public mirror
+*.HMI
+*.tft
