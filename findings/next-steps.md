@@ -49,6 +49,57 @@ longer needed for any HMI-content change.  267 tests; verified byte-
 identical via the `nxt compile` CLI (`cmp` clean, 504784 B).
 
 
+## 🔶 LIVE fixture (510388 B) — in progress (me/nextion#2, 2026-06-13)
+
+Second fixture `tests/fixtures/live/nextion.hmi.{HMI,tft}` — the live
+project (newer editor, H1[0x02]='D' vs source 'C').  Goal: `compile(live.HMI)
+== live.tft` byte-for-byte, additive to the source milestone (still green).
+
+**Compiler is now version/project-parameterized** (commit a12d5b6):
+`scripts/lib/compiler_profile.py` reads the editor version letter from
+H1[0x02] → a `CompilerProfile` (setbrush opcode, sysvar-index overrides,
+per-project editor scratch), threaded through `header_generator`,
+`event_region_generator`, `frame_image_generator`, `compile_hmi`.  Source
+stays byte-identical; 267 tests green.
+
+**Locked regions (live):**
+- Usercode header: global memory directory (vscope-grown TLV + 2 vscope
+  records), name-hash table, MainCode (baud sysvar 0x0e→0x1a, setbrush
+  091c08→091d08).
+- MainCode startup block = home page id 0 (the editor re-emits the
+  configured power-on page, NOT the script's last `page N`; live navigates
+  `page 1` but re-emits `page 0`).
+- Per-page event regions through overlap refs: refs use **transitive-
+  closure overlap clusters** (the two bottom-corner hotspots both sit on the
+  full-width status bar `s0`, so all three reference each other).
+
+**REMAINING region — the media-frame allocator (objdatarampos), version-D.**
+Fully reverse-engineered, not yet implemented.  Rules (validated against all
+4 live pages):
+- Version-D runtime-header/prefix is **0x40** bytes (vs 0x10 in source/C):
+  non-vscope objects are allocated sequentially in component order starting
+  at `frame_start(n) + 0x30` (= `0x40 + 4*ceil(n/4)`).  `medatapos` is
+  INVARIANT (`frame_end_D - 0x40 == my_frame_end - 0x10`), which is why
+  page0/2/3 medatapos already match; only page1 differs (+0x18, the pulled
+  vscope).
+- **vscope (global-scope) objects are pulled OUT of the page sequence** and
+  placed in the prefix/global region at offset `0x2c - status_array_size`
+  (status = `4*ceil(n/4)`); validated: page0 x1 @0x0c (status 0x20),
+  page1 x1 @0x24 (status 0x08), both summing to 0x2c.  (Single 24-B vscope
+  only; multi-vscope stacking not yet sampled.)
+- This `objdatarampos` change propagates into objxinxi (+28), every
+  binattinf record, the media-blob prefix bytes (0x40 of header incl. the
+  status array + the vscope data slot), and the page-dir.  Largest remaining
+  blast radius; needs version-D `FRAME_PREFIX`/vscope-first in
+  `media_allocator` + matching media-blob byte emission, then re-diff
+  objxinxi / binattinf / page-dir.
+
+**Also still open (smaller, behind the allocator):** integer-xfloat
+`vvs1`/res0 bytes for x2/x4 (REF shows vvs1 not matching HMI attr — likely
+editor scratch tied to the frame reorder; revisit after the allocator lands)
+and the trailing CRC.  No live e2e test yet
+(`tests/sim/test_compile_hmi_live_end_to_end.py` to be added once clean).
+
 
 Forward-looking items only. Tools/findings already delivered are
 documented elsewhere; the most relevant cross-references:
