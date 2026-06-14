@@ -68,6 +68,49 @@ def vscope_record(ordinal, bco, pco, xcen, ycen) -> bytes:
     )
 
 
+# Inline-txt buffer (bytes) for the global-scope text-bearing record below.
+_GLOBAL_TEXT_INLINE = 16
+
+
+def vscope_text_record(bco, txt) -> bytes:
+    """One global-scope record for a ``vscope=1`` **Text** (lei 116).
+
+    Unlike the 24-byte numeric ``vscope_record``, a global Text stores its
+    ``txt`` string inline in the global-memory directory (this is where a
+    global Text's label lives — the open part of me/miata-dash#35, located
+    here from the ``global_mixed`` oracle):
+
+        +0  u32  0
+        +4  u16  bco
+        +6  3 B  ``01 01 00`` text-slot marker
+        +9  ...  ``txt`` (latin-1) + NUL
+        ...      zero pad to ``4 + 2 + 3 + _GLOBAL_TEXT_INLINE - 1`` (= 24)
+                 when the string fits the inline buffer.
+
+    Validated against ``global_mixed`` for a 3-char txt (record = 20 bytes:
+    ``00000000 ffff 010100 414243 00`` + pad).  The pad-out rule for a txt
+    that overflows the inline buffer is UNVERIFIED (no oracle) — see the
+    caller, which refuses the overflow case rather than guess.
+    """
+    enc = txt.encode("latin-1", "replace") if isinstance(txt, str) else b""
+    # Fixed 20-byte record: 4-byte head + bco(2) + marker(3) + txt + NUL,
+    # zero-padded to 20.  The 20-byte size also equals this global's
+    # contribution to ``media_allocator.project_global_shift`` (Text = 0x14).
+    GLOBAL_TEXT_RECORD = 20
+    inline_budget = GLOBAL_TEXT_RECORD - (4 + 2 + 3)   # bytes for txt + NUL
+    if len(enc) + 1 > inline_budget:
+        raise NotImplementedError(
+            "global Text txt overflows the inline buffer; the spill layout in "
+            "the global-memory directory is unverified (no oracle) — #35/#37"
+        )
+    body = bytearray()
+    body += struct.pack("<IH", 0, bco & 0xFFFF)
+    body += b"\x01\x01\x00"
+    body += enc + b"\x00"
+    body += b"\x00" * (GLOBAL_TEXT_RECORD - len(body))
+    return bytes(body)
+
+
 def _vscope_instances(pages):
     """Every ``vscope=1`` component page-instance, in page order."""
     out = []
@@ -84,7 +127,9 @@ def build_global_dir(pages, app_allvas_qty) -> bytes:
     page-instance).  The name-hash table follows (region[2])."""
     region1_size = _REGION1_BASE + 4 * max(0, app_allvas_qty - 3)
     instances = _vscope_instances(pages)
-    region1_size += len(instances) * 24
+    # Each global page-instance contributes a record: 24 bytes for a numeric
+    # global, 20 bytes for a Text global (which carries its inline txt).
+    region1_size += sum(20 if c.lei == 116 else 24 for c in instances)
 
     region2_off = _TLV_BODY_END + region1_size
     total_size = region2_off + _REGION2_SIZE_FIELD
@@ -121,11 +166,16 @@ def build_global_dir(pages, app_allvas_qty) -> bytes:
             ordinal = per_name_seq[c.name]
         else:
             ordinal = 0
-        region1 += vscope_record(
-            ordinal,
-            int(a.get("bco") or 0), int(a.get("pco") or 0),
-            int(a.get("xcen") or 0), int(a.get("ycen") or 0),
-        )
+        if c.lei == 116:
+            # Global Text: inline-txt record (see vscope_text_record).
+            region1 += vscope_text_record(int(a.get("bco") or 0),
+                                          a.get("txt"))
+        else:
+            region1 += vscope_record(
+                ordinal,
+                int(a.get("bco") or 0), int(a.get("pco") or 0),
+                int(a.get("xcen") or 0), int(a.get("ycen") or 0),
+            )
     out += region1
     return bytes(out)
 
