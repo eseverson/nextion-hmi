@@ -23,7 +23,7 @@ from scripts.lib.media_allocator import layout_from_hmi_page
 from scripts.lib.frame_image_generator import build_frame_image
 from scripts.lib.page_init_generator import (
     build_constant_page_init, build_page_init_with_codesload,
-    build_page_init_with_timer,
+    build_page_init_with_timer, DOEVENTS_BLOCK, TIMERSET_OPCODE,
 )
 from scripts.lib.script_compiler import compile_event_handler, CompileContext
 from scripts.lib.tft_attrs_encoder import APP_ATT_NAMES
@@ -57,18 +57,25 @@ def _attr_record_local_index(component_attstr_slots, attr_name, block_base) -> i
     return component_attstr_slots[slot]
 
 
-def build_page_init_chain(page, page_index, page_counts, attr_record_lookup):
+def build_page_init_chain(page, page_index, page_counts, attr_record_lookup,
+                          profile=None):
     """Build one page's page-init chain.
 
     ``attr_record_lookup(comp_name, attr) -> page_local_record_index``
     resolves a component attribute to its page-local binattinf record
     index (the value the attstr slot holds); this module converts it to a
-    global index for the bytecode ``LOAD`` operands.
+    global index for the bytecode ``LOAD`` operands.  ``profile`` carries the
+    editor-version opcode heads (``doevents`` / ``timerset``) + sysvar
+    overrides.
     """
+    doevents = profile.doevents_opcode if profile else DOEVENTS_BLOCK
+    timerset = profile.timerset_opcode if profile else TIMERSET_OPCODE
+    sysvar_overrides = dict(profile.sysvar_overrides) if profile else {}
+
     # Page with a codesload event → draw + compiled handler.
     codesload = page.page_events.get("codesload")
     if codesload:
-        ctx = CompileContext()
+        ctx = CompileContext(sysvar_overrides=sysvar_overrides)
         # Resolve every <comp>.<attr> ref in the handler to its global
         # record index.
         import re
@@ -80,7 +87,7 @@ def build_page_init_chain(page, page_index, page_counts, attr_record_lookup):
                 page_counts, page_index, local)
         ctx.component_offsets = offsets
         body = compile_event_handler(codesload, ctx)
-        return build_page_init_with_codesload(body)
+        return build_page_init_with_codesload(body, doevents)
 
     # Page with a Timer → arm it.
     timer = next((c for c in page.components if c.lei == 51), None)
@@ -89,9 +96,10 @@ def build_page_init_chain(page, page_index, page_counts, attr_record_lookup):
         en_local = attr_record_lookup(timer.name, "en")
         tim_g = global_record_index(page_counts, page_index, tim_local)
         en_g = global_record_index(page_counts, page_index, en_local)
-        return build_page_init_with_timer(tim_g, en_g, int(timer.attrs["id"]))
+        return build_page_init_with_timer(tim_g, en_g, int(timer.attrs["id"]),
+                                          doevents, timerset)
 
-    return build_constant_page_init()
+    return build_constant_page_init(doevents)
 
 
 def build_media_blob(page, page_index, page_counts, attr_record_lookup) -> bytes:

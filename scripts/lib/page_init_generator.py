@@ -41,10 +41,10 @@ def _entry(payload: bytes) -> bytes:
     return struct.pack("<I", len(payload)) + payload
 
 
-def build_constant_page_init() -> bytes:
+def build_constant_page_init(doevents_opcode: bytes = DOEVENTS_BLOCK) -> bytes:
     """The page-init chain for a page with no scrolling text and no page
     events: ``[preamble][doevents][terminator]`` (pages 1 & 3)."""
-    return PREAMBLE + _entry(DOEVENTS_BLOCK) + TERM
+    return PREAMBLE + _entry(doevents_opcode) + TERM
 
 
 # ``draw`` opcode (09 1d 04) + the single ASCII arg the editor emits as the
@@ -55,7 +55,8 @@ DRAW_OPCODE = bytes.fromhex("091d04")
 CODESLOAD_DRAW_ARG = b"2"
 
 
-def build_page_init_with_codesload(codesload_body: bytes) -> bytes:
+def build_page_init_with_codesload(codesload_body: bytes,
+                                   doevents_opcode: bytes = DOEVENTS_BLOCK) -> bytes:
     """The page-init chain for a page with a ``codesload`` event (page 2):
     ``[preamble][draw 2][compiled codesload][doevents][terminator]``.
 
@@ -67,7 +68,7 @@ def build_page_init_with_codesload(codesload_body: bytes) -> bytes:
     out = bytearray(PREAMBLE)
     out += _entry(DRAW_OPCODE + CODESLOAD_DRAW_ARG)
     out += codesload_body
-    out += _entry(DOEVENTS_BLOCK)
+    out += _entry(doevents_opcode)
     out += TERM
     return bytes(out)
 
@@ -84,26 +85,30 @@ def _load_op(record_index: int) -> bytes:
     return b"\x01" + struct.pack("<I", record_index & 0xFFFFFFFF)
 
 
-def build_timerset_block(tim_record: int, en_record: int, timer_id: int) -> bytes:
+def build_timerset_block(tim_record: int, en_record: int, timer_id: int,
+                         timerset_opcode: bytes = TIMERSET_OPCODE) -> bytes:
     """One Timer's page-load arm: ``timerset LOAD(en), <id>, LOAD(tim), 0``.
 
     ``tim_record`` / ``en_record`` are the GLOBAL binattinf record indices
     of the timer's ``tim`` / ``en`` attributes."""
-    return (TIMERSET_OPCODE
+    return (timerset_opcode
             + _load_op(en_record) + b"," + str(timer_id).encode("ascii")
             + b"," + _load_op(tim_record) + b",0")
 
 
 def build_page_init_with_timer(tim_record: int, en_record: int,
-                               timer_id: int) -> bytes:
+                               timer_id: int,
+                               doevents_opcode: bytes = DOEVENTS_BLOCK,
+                               timerset_opcode: bytes = TIMERSET_OPCODE) -> bytes:
     """The page-init chain for a page whose load handler arms a Timer
     (page 0): ``[preamble][timerset][L re-arm (placeholder)][doevents]
     [terminator]``.  The ``L`` marker's address is filled by
     ``usercode_assembler.patch_l_markers`` once the layout is fixed."""
     out = bytearray(PREAMBLE)
-    out += _entry(build_timerset_block(tim_record, en_record, timer_id))
+    out += _entry(build_timerset_block(tim_record, en_record, timer_id,
+                                       timerset_opcode))
     out += _entry(L_OPCODE + struct.pack("<I", 0))   # placeholder addr
-    out += _entry(DOEVENTS_BLOCK)
+    out += _entry(doevents_opcode)
     out += TERM
     return bytes(out)
 

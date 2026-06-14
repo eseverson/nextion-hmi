@@ -234,14 +234,19 @@ PROJECT_BRUSH_STATE: dict[tuple[str, str], tuple[int, int]] = {
 }
 
 
-def build_frame_image(page, brush_state=None) -> bytes:
+def build_frame_image(page, brush_state=None, frame_prefix=0x10) -> bytes:
     """Generate one page's frame image from an ``hmi_model.HmiPageModel``.
 
     Layout: page block, then each object's ``<Kind>_PARAM`` block in order
     (4-aligned, long-string spill matching the media allocator).
     ``brush_state`` is the per-project ``{(page_name, comp_name): (en,
     backcolor)}`` editor draw-session scratch (from the CompilerProfile);
-    it defaults to the source fixture's :data:`PROJECT_BRUSH_STATE`."""
+    it defaults to the source fixture's :data:`PROJECT_BRUSH_STATE`.
+    ``frame_prefix`` selects the editor build's frame layout (0x10 source/C,
+    0x40 the 'D' build with its global-scope-object prefix slot)."""
+    from scripts.lib.media_allocator import FRAME_PREFIX_D
+    if frame_prefix == FRAME_PREFIX_D:
+        return _build_frame_image_d(page, brush_state)
     brush_map = PROJECT_BRUSH_STATE if brush_state is None else brush_state
     comps = page.components
     out = bytearray()
@@ -258,6 +263,53 @@ def build_frame_image(page, brush_state=None) -> bytes:
         if brush is not None and hc.lei in PARAM_TK_STRUCTS:
             en, backcolor = brush
             # res3 @ block+25 (en, u8), res4 @ block+26 (backcolor, u16).
+            struct.pack_into("<BH", out, block_start + 25, en & 0xFF,
+                             backcolor & 0xFFFF)
+        while len(out) & 3:
+            out += b"\x00"
+    return bytes(out)
+
+
+def _build_frame_image_d(page, brush_state=None) -> bytes:
+    """The 'D' build's on-disk frame image.
+
+    Physically identical to the source/C frame (page block + each object's
+    ``<Kind>_PARAM`` block, 4-aligned, long-string spill) with two
+    differences that mirror :func:`media_allocator.layout_page_frame`'s 'D'
+    path:
+
+    * **global-scope (`vscope=1`) objects are omitted** — their block lives
+      in the global region, not the per-page frame; and
+    * when a vscope was pulled AND the page carries variables, a zero hole
+      the size of the pulled block(s) precedes the first trailing non-visual
+      (hotspot/timer/variable), matching the reserved ``objdatarampos`` gap.
+    """
+    from scripts.lib.memory_allocator import SIZEOF_OBJDATA_T1
+    brush_map = PROJECT_BRUSH_STATE if brush_state is None else brush_state
+    comps = page.components
+
+    vs_idx = [i for i, c in enumerate(comps) if c.attrs.get("vscope") == 1]
+    pulled = sum(SIZEOF_OBJDATA_T1.get(comps[i].lei, 0) for i in vs_idx)
+    has_vars = any(c.lei == 52 for c in comps)
+    hole_before = None
+    if vs_idx and has_vars:
+        for i, c in enumerate(comps):
+            if i not in vs_idx and c.lei in (51, 52, 109):
+                hole_before = i
+                break
+
+    out = bytearray()
+    out += build_page_block(len(comps), page.page_attrs)
+    for ci, hc in enumerate(comps):
+        if ci == 0 or ci in vs_idx:
+            continue
+        if ci == hole_before:
+            out += b"\x00" * pulled
+        block_start = len(out)
+        out += build_object_block(hc.lei, hc.attrs)
+        brush = brush_map.get((page.name, hc.name))
+        if brush is not None and hc.lei in PARAM_TK_STRUCTS:
+            en, backcolor = brush
             struct.pack_into("<BH", out, block_start + 25, en & 0xFF,
                              backcolor & 0xFFFF)
         while len(out) & 3:

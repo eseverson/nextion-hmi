@@ -289,6 +289,7 @@ def build_component_binattinf(
     fromobjid: int,
     authored: dict | None = None,
     allow_unverified: bool = False,
+    font_count: int | None = None,
 ) -> bytes:
     """Generate one component's binattinf block (stride * 24 bytes) from
     its geometry + HMI attributes + the media allocator's ``objdatarampos``.
@@ -297,7 +298,12 @@ def build_component_binattinf(
     literal records — sta/style/spax/spay).  Only the byte-verified classes
     (:data:`VERIFIED_LEIS`) are emitted by default; pass
     ``allow_unverified=True`` to emit a reversed-but-not-whole-block-verified
-    class (the ``att_changeid`` enumeration gap may still differ)."""
+    class (the ``att_changeid`` enumeration gap may still differ).
+
+    ``font_count`` is the project's font count (appinf1 ``zimoqyt``); when
+    given, every ``Fontid`` attribute's ``num_maxval`` is set to
+    ``font_count - 1`` (a resources-coupled bound — the source fixture has 2
+    fonts → max 1, the live project has 3 → max 2)."""
     if lei not in DATAFROM_ATTRS:
         raise KeyError(
             f"no DATAFROM_ATTRS table for lei={lei}; reverse its RAM-backed "
@@ -347,8 +353,12 @@ def build_component_binattinf(
         merrylenth = da.merrylenth_override
         if da.name == "txt" and txt_merrylenth is not None:
             merrylenth = txt_merrylenth
+        # Fontid bound is resources-coupled: max = font_count - 1.
+        maxval = da.maxval
+        if da.type_name == "Fontid" and font_count is not None:
+            maxval = max(0, font_count - 1)
         records[da.name] = mk(
-            da.name, objdatarampos + da.attposup, da.maxval, da.minval,
+            da.name, objdatarampos + da.attposup, maxval, da.minval,
             da.type_name, change=da.change, datafrom=True,
             merrylenth=merrylenth, changeid=da.changeid,
         )

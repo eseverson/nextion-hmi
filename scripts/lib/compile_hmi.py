@@ -49,7 +49,7 @@ from scripts.lib.usercode_assembler import EVENT_LAYOUT, patch_l_markers
 from scripts.lib.hmi_model import (
     load_hmi_pages, build_page_name_hash_table, build_appallvas,
 )
-from scripts.lib.media_allocator import layout_from_hmi_page
+from scripts.lib.media_allocator import layout_from_hmi_page, FRAME_PREFIX
 from scripts.lib.media_blob_generator import (
     page_record_counts, build_page_init_chain,
 )
@@ -99,7 +99,7 @@ class ObjxinxiLayout:
 
 
 def assemble_usercode_and_layout(hmi, program_s, app_allvas_qty,
-                                 profile=None):
+                                 profile=None, font_count=None):
     """Assemble the usercode region (strdataaddr..pageadd) from generated
     sub-regions and return ``(usercode_bytes, per_page_objxinxi_layout,
     page_dir_offsets, attstr_tables, static_str_beg)``.
@@ -117,6 +117,7 @@ def assemble_usercode_and_layout(hmi, program_s, app_allvas_qty,
     from scripts.lib.hmi_model import APPALLVAS_RECORD_SIZE
 
     sysvar_overrides = dict(profile.sysvar_overrides) if profile else None
+    fp = profile.frame_prefix if profile else FRAME_PREFIX
     header = build_header(hmi, program_s, app_allvas_qty,
                           sysvar_overrides=sysvar_overrides)
 
@@ -168,7 +169,7 @@ def assemble_usercode_and_layout(hmi, program_s, app_allvas_qty,
 
         brush_state = profile.brush_state if profile else None
         media = _build_media_blob_for_page(hp, pi, counts, po, base,
-                                           brush_state)
+                                           brush_state, fp, profile)
         out += media
         # Page-record offset (relative to attdataaddr); the absolute
         # attdataaddr_rel is filled once static_str_beg is known, below.
@@ -180,7 +181,7 @@ def assemble_usercode_and_layout(hmi, program_s, app_allvas_qty,
     static_str_beg = len(out)
     out += build_appallvas(program_s)
     for pi, hp in enumerate(hmi):
-        layout = layout_from_hmi_page(hp)
+        layout = layout_from_hmi_page(hp, fp)
         for ci, hc in enumerate(hp.components):
             pa = hc.attrs
             x = 0 if ci == 0 else int(pa.get("x") or 0)
@@ -191,7 +192,7 @@ def assemble_usercode_and_layout(hmi, program_s, app_allvas_qty,
                 hc.lei, hc.comp_id, x, y, w, h,
                 objdatarampos=layout.objdatarampos[ci],
                 frompageid=hp.page_id, fromobjid=ci,
-                authored=pa, allow_unverified=True)
+                authored=pa, allow_unverified=True, font_count=font_count)
 
     # Now that static_str_beg is known, resolve the page-directory
     # ``attdataaddr_rel`` for each page:
@@ -237,10 +238,11 @@ def _generated_attstr_slots(hmi):
     return out
 
 
-def _build_media_blob_for_page(hp, pi, counts, po, base, brush_state=None):
-    layout = layout_from_hmi_page(hp)
+def _build_media_blob_for_page(hp, pi, counts, po, base, brush_state=None,
+                               frame_prefix=FRAME_PREFIX, profile=None):
+    layout = layout_from_hmi_page(hp, frame_prefix)
     name_hash = build_page_name_hash_table(hp, layout.medatapos)
-    frame = build_frame_image(hp, brush_state)
+    frame = build_frame_image(hp, brush_state, frame_prefix)
 
     def attr_record_lookup(comp_name, attr):
         # page-local record index (the attstr slot value) for the named
@@ -250,7 +252,8 @@ def _build_media_blob_for_page(hp, pi, counts, po, base, brush_state=None):
                 return o.slots[APP_ATT_NAMES.index(attr)]
         raise KeyError(comp_name)
 
-    page_init = build_page_init_chain(hp, pi, counts, attr_record_lookup)
+    page_init = build_page_init_chain(hp, pi, counts, attr_record_lookup,
+                                      profile)
     return name_hash + frame + page_init
 
 
@@ -352,6 +355,8 @@ def compile_hmi(hmi_path, resources_source) -> bytes:
     from sim.loader import load_hmi as _load_hmi_state
 
     from scripts.lib.compiler_profile import profile_for, project_scratch_for
+    from scripts.lib.tft_attrs import parse_appinf1_corrected
+    from scripts.lib.h2_cipher import encrypt as h2_decrypt
 
     data = Path(resources_source).read_bytes()
     model_crc = int.from_bytes(data[0x2E:0x32], "little")
@@ -366,8 +371,14 @@ def compile_hmi(hmi_path, resources_source) -> bytes:
     scratch = project_scratch_for(data, hmi)
     profile = profile_for(data, **scratch)
 
+    # Font count (appinf1 zimoqyt) is resources-coupled — read from the
+    # reference; it sets every Fontid attribute's binattinf num_maxval.
+    font_count = parse_appinf1_corrected(
+        h2_decrypt(data[0xC8:0xC8 + 196], model_crc)).get("zimoqyt")
+
     usercode, layouts, page_dir, attstr_tables, static_str_beg = \
-        assemble_usercode_and_layout(hmi, program_s, app_allvas_qty, profile)
+        assemble_usercode_and_layout(hmi, program_s, app_allvas_qty, profile,
+                                     font_count=font_count)
 
     # appinf1 (the H2 directory) is GENERATED from the assembled region
     # sizes + the resources descriptors pulled from ``resources_source``.
@@ -376,9 +387,10 @@ def compile_hmi(hmi_path, resources_source) -> bytes:
     a1 = appinf1.fields
 
     # objxinxi table (geometry + GENERATED offsets + GENERATED attstr slots).
+    fp = profile.frame_prefix
     obj_bytes = bytearray()
     for pi, hp in enumerate(hmi):
-        media = layout_from_hmi_page(hp)
+        media = layout_from_hmi_page(hp, fp)
         for ci, (hc, cl) in enumerate(zip(hp.components, layouts[pi])):
             pa = hc.attrs
             x = 0 if ci == 0 else int(pa.get("x") or 0)
@@ -399,7 +411,7 @@ def compile_hmi(hmi_path, resources_source) -> bytes:
     objstar = 0
     for pi, hp in enumerate(hmi):
         hexpos, attdata_rel = page_dir[pi]
-        medatapos = layout_from_hmi_page(hp).medatapos
+        medatapos = layout_from_hmi_page(hp, fp).medatapos
         pdir_bytes += encode_page_dir_entry(
             objstar, len(hp.components),
             PageDirInputs(hexpos=hexpos, attdataaddr_rel=attdata_rel,

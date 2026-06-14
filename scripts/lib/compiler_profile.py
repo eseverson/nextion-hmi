@@ -27,8 +27,18 @@ class CompilerProfile:
     # ── editor-version-dependent (read from the H1 version letter) ──────────
     setbrush_opcode: bytes
     """The 3-byte ``setbrush`` opcode head this editor build emits."""
+    doevents_opcode: bytes = bytes.fromhex("092208")
+    """The 3-byte page-load ``doevents`` opcode (``09 22 08`` C / ``09 23 08``
+    D — the ``09 xx 08`` opcode family's index is +1 in the newer build)."""
+    timerset_opcode: bytes = bytes.fromhex("092308")
+    """The 3-byte page-load ``timerset`` opcode (``09 23 08`` C / ``09 24 08``
+    D)."""
     sysvar_overrides: dict = field(default_factory=dict)
     """``{name: (size_class, index)}`` overrides for shifted system vars."""
+    frame_prefix: int = 0x10
+    """The media-frame runtime-header size (``objdatarampos`` base): 0x10 in
+    the source/C build, 0x40 in the 'D' build (which also pulls global-scope
+    objects into a prefix slot)."""
 
     # ── per-project editor session scratch (non-content-derivable) ──────────
     s_biaoji: int = 0
@@ -43,13 +53,21 @@ class CompilerProfile:
 _VERSION_LETTER_CONST = {
     ord("C"): {  # source fixture build (nxt-1.65.1)
         "setbrush_opcode": bytes.fromhex("091c08"),
+        "doevents_opcode": bytes.fromhex("092208"),
+        "timerset_opcode": bytes.fromhex("092308"),
         "sysvar_overrides": {},
+        "frame_prefix": 0x10,
     },
     ord("D"): {  # live build (1.67.x)
+        # The `09 xx 08` opcode family's index is +1 in this build.
         "setbrush_opcode": bytes.fromhex("091d08"),
-        # ~12 sysvars inserted before `baud`; only `baud` is used by the
-        # projects' MainCode, so override just that one.
-        "sysvar_overrides": {"baud": (4, 0x1A)},
+        "doevents_opcode": bytes.fromhex("092308"),
+        "timerset_opcode": bytes.fromhex("092408"),
+        # Newer build inserted sysvars, shifting size-4 indices: `baud`
+        # 0x0e→0x1a, `dims` 0x14→0x21.  Override the ones the projects'
+        # bytecode actually references.
+        "sysvar_overrides": {"baud": (4, 0x1A), "dims": (4, 0x21)},
+        "frame_prefix": 0x40,
     },
 }
 
@@ -114,7 +132,10 @@ def profile_for(tft_bytes: bytes, *, s_biaoji: int = 0,
         )
     return CompilerProfile(
         setbrush_opcode=const["setbrush_opcode"],
+        doevents_opcode=const.get("doevents_opcode", bytes.fromhex("092208")),
+        timerset_opcode=const.get("timerset_opcode", bytes.fromhex("092308")),
         sysvar_overrides=dict(const["sysvar_overrides"]),
+        frame_prefix=const.get("frame_prefix", 0x10),
         s_biaoji=s_biaoji,
         brush_state=dict(brush_state or {}),
     )
