@@ -49,56 +49,55 @@ longer needed for any HMI-content change.  267 tests; verified byte-
 identical via the `nxt compile` CLI (`cmp` clean, 504784 B).
 
 
-## 🔶 LIVE fixture (510388 B) — in progress (me/nextion#2, 2026-06-13)
+## ✅ LIVE fixture (510388 B) ACHIEVED (me/nextion#2, 2026-06-13)
 
-Second fixture `tests/fixtures/live/nextion.hmi.{HMI,tft}` — the live
-project (newer editor, H1[0x02]='D' vs source 'C').  Goal: `compile(live.HMI)
-== live.tft` byte-for-byte, additive to the source milestone (still green).
+**`compile(tests/fixtures/live/nextion.hmi.HMI) == tests/fixtures/live/
+nextion.hmi.tft` byte-for-byte (510388 B).**  The live display project
+(newer editor, H1[0x02]='D' vs source 'C') now compiles from the same code
+path as the frozen source fixture — additive, both e2e tests + the full
+suite green (269).  Test: `tests/sim/test_compile_hmi_live_end_to_end.py`.
 
-**Compiler is now version/project-parameterized** (commit a12d5b6):
-`scripts/lib/compiler_profile.py` reads the editor version letter from
-H1[0x02] → a `CompilerProfile` (setbrush opcode, sysvar-index overrides,
-per-project editor scratch), threaded through `header_generator`,
-`event_region_generator`, `frame_image_generator`, `compile_hmi`.  Source
-stays byte-identical; 267 tests green.
+The compiler is **version/project-parameterized** via
+`scripts/lib/compiler_profile.py`, which reads the editor version letter
+from H1[0x02] → a `CompilerProfile` threaded through every generator.  The
+'D'-vs-'C' differences reverse-engineered and handled:
 
-**Locked regions (live):**
-- Usercode header: global memory directory (vscope-grown TLV + 2 vscope
-  records), name-hash table, MainCode (baud sysvar 0x0e→0x1a, setbrush
-  091c08→091d08).
-- MainCode startup block = home page id 0 (the editor re-emits the
+- **`09 xx 08` opcode family +1** in the 'D' build: setbrush 091c08→091d08,
+  doevents 092208→092308, timerset 092308→092408.
+- **System-variable indices shifted** (sysvars inserted): `baud` 0x0e→0x1a,
+  `dims` 0x14→0x21.
+- **MainCode startup block = home page id 0** (the editor re-emits the
   configured power-on page, NOT the script's last `page N`; live navigates
-  `page 1` but re-emits `page 0`).
-- Per-page event regions through overlap refs: refs use **transitive-
-  closure overlap clusters** (the two bottom-corner hotspots both sit on the
-  full-width status bar `s0`, so all three reference each other).
+  `page 1` in-script but re-emits `page 0` — the source's trailing `page 0`
+  had masked this).
+- **Overlap refs use transitive-closure clusters**: the two bottom-corner
+  nav hotspots both sit on the full-width status bar `s0`, so all three
+  reference each other even without direct box overlap.
+- **Media-frame allocator, version-D** (`media_allocator.layout_page_frame`
+  + `frame_image._build_frame_image_d`): runtime-header prefix 0x40 (vs
+  0x10); non-vscope objects sequential from `frame_start(n)+0x30`;
+  global-scope (`vscope=1`) objects pulled into a prefix slot at
+  `0x2c - status_array_size`; a pulled-size zero hole precedes the trailing
+  non-visual cluster when a page has variables; `medatapos = frame_end -
+  prefix`.  Reproduces all 4 pages' objdatarampos/medatapos.  The on-disk
+  frame omits the vscope blocks + emits the hole.
+- **Global-scope flags**: the vscope binattinf record's attmemorypos = 1 and
+  the objxinxi +2 byte = 1 for `vscope=1` components (else 0).
+- **`Fontid` num_maxval = font_count - 1** (resources-coupled `zimoqyt`:
+  source 2 fonts → 1, live 3 → 2).
+- **`txt` buffer capacity = `txt_maxl + 1`** (the configured field width,
+  floored at the inline buffer), independent of the current string — the
+  live `s0` has `txt=''` but `txt_maxl=40` → capacity 41.
+- **Variable `attstr_bytecode_offset`** is taken from the cursor right after
+  the Variable group (not the media start), so a component following the
+  variables — the live page-0 back-nav hotspot `m1` — no longer skews it.
+- **Per-project editor scratch** (S biaoji + `settings/t0` draw-brush carry)
+  captured against the live reference, keyed by version letter.
 
-**REMAINING region — the media-frame allocator (objdatarampos), version-D.**
-Fully reverse-engineered, not yet implemented.  Rules (validated against all
-4 live pages):
-- Version-D runtime-header/prefix is **0x40** bytes (vs 0x10 in source/C):
-  non-vscope objects are allocated sequentially in component order starting
-  at `frame_start(n) + 0x30` (= `0x40 + 4*ceil(n/4)`).  `medatapos` is
-  INVARIANT (`frame_end_D - 0x40 == my_frame_end - 0x10`), which is why
-  page0/2/3 medatapos already match; only page1 differs (+0x18, the pulled
-  vscope).
-- **vscope (global-scope) objects are pulled OUT of the page sequence** and
-  placed in the prefix/global region at offset `0x2c - status_array_size`
-  (status = `4*ceil(n/4)`); validated: page0 x1 @0x0c (status 0x20),
-  page1 x1 @0x24 (status 0x08), both summing to 0x2c.  (Single 24-B vscope
-  only; multi-vscope stacking not yet sampled.)
-- This `objdatarampos` change propagates into objxinxi (+28), every
-  binattinf record, the media-blob prefix bytes (0x40 of header incl. the
-  status array + the vscope data slot), and the page-dir.  Largest remaining
-  blast radius; needs version-D `FRAME_PREFIX`/vscope-first in
-  `media_allocator` + matching media-blob byte emission, then re-diff
-  objxinxi / binattinf / page-dir.
-
-**Also still open (smaller, behind the allocator):** integer-xfloat
-`vvs1`/res0 bytes for x2/x4 (REF shows vvs1 not matching HMI attr — likely
-editor scratch tied to the frame reorder; revisit after the allocator lands)
-and the trailing CRC.  No live e2e test yet
-(`tests/sim/test_compile_hmi_live_end_to_end.py` to be added once clean).
+The only span still read from the live reference is the same as for the
+source: the resources blob (0x10000..0x70000) + the resources-coupled
+appinf1 fields, plus a 3-byte `0xff` alignment gap between the objxinxi
+table and the trailing CRC (template padding — the source fixture has none).
 
 
 Forward-looking items only. Tools/findings already delivered are
