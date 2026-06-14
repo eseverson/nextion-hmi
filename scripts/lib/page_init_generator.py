@@ -72,12 +72,52 @@ def build_page_init_with_codesload(codesload_body: bytes) -> bytes:
     return bytes(out)
 
 
+# ``timerset`` (09 23 08) and ``L`` (4c 20 03) opcodes for a page's Timer
+# arm.  The page-load handler arms each Timer with
+# ``timerset LOAD(en), <id>, LOAD(tim), 0`` followed by an ``L`` re-arm
+# marker whose address is back-patched by ``patch_l_markers`` at assembly.
+TIMERSET_OPCODE = bytes.fromhex("092308")
+L_OPCODE = bytes.fromhex("4c2003")
+
+
+def _load_op(record_index: int) -> bytes:
+    return b"\x01" + struct.pack("<I", record_index & 0xFFFFFFFF)
+
+
+def build_timerset_block(tim_record: int, en_record: int, timer_id: int) -> bytes:
+    """One Timer's page-load arm: ``timerset LOAD(en), <id>, LOAD(tim), 0``.
+
+    ``tim_record`` / ``en_record`` are the GLOBAL binattinf record indices
+    of the timer's ``tim`` / ``en`` attributes."""
+    return (TIMERSET_OPCODE
+            + _load_op(en_record) + b"," + str(timer_id).encode("ascii")
+            + b"," + _load_op(tim_record) + b",0")
+
+
+def build_page_init_with_timer(tim_record: int, en_record: int,
+                               timer_id: int) -> bytes:
+    """The page-init chain for a page whose load handler arms a Timer
+    (page 0): ``[preamble][timerset][L re-arm (placeholder)][doevents]
+    [terminator]``.  The ``L`` marker's address is filled by
+    ``usercode_assembler.patch_l_markers`` once the layout is fixed."""
+    out = bytearray(PREAMBLE)
+    out += _entry(build_timerset_block(tim_record, en_record, timer_id))
+    out += _entry(L_OPCODE + struct.pack("<I", 0))   # placeholder addr
+    out += _entry(DOEVENTS_BLOCK)
+    out += TERM
+    return bytes(out)
+
+
 __all__ = [
     "TERM",
     "DOEVENTS_BLOCK",
     "PREAMBLE",
     "DRAW_OPCODE",
     "CODESLOAD_DRAW_ARG",
+    "TIMERSET_OPCODE",
+    "L_OPCODE",
     "build_constant_page_init",
     "build_page_init_with_codesload",
+    "build_timerset_block",
+    "build_page_init_with_timer",
 ]

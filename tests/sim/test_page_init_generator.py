@@ -34,7 +34,9 @@ from scripts.lib.script_compiler import (  # noqa: E402
 )
 from scripts.lib.page_init_generator import (  # noqa: E402
     build_constant_page_init, build_page_init_with_codesload,
+    build_page_init_with_timer,
 )
+from scripts.lib.tft_attrs_encoder import APP_ATT_NAMES  # noqa: E402
 
 H2_START, H2_END = 0xC8, 0xC8 + 196
 SENTINEL = 0xFFFFFFFF
@@ -102,3 +104,37 @@ def test_page2_codesload_page_init():
 
     live = _live_page_init(data, a1, pd, objs, 2, hmi)
     assert gen == live, "page 2 page-init mismatch"
+
+
+def test_page0_timer_page_init():
+    """Page 0's page-init (the tm0 marquee `timerset` + L re-arm) generates
+    byte-for-byte except the L-marker address, which is back-patched by the
+    usercode assembler.  tim/en use the GLOBAL binattinf record indices."""
+    data, a1 = _load()
+    pd = parse_page_directory(data, a1["pageadd"], a1["pageqyt"])
+    objs = parse_objxinxi(data, a1["objxinxiadd"], a1["objqyt"])
+    hmi = load_hmi_pages(HMI_PATH)
+
+    po = objs[pd[0]["objstar"]:pd[0]["objstar"] + pd[0]["objqyt"]]
+    tm0 = next(o for o in po if o.lei == 51)
+    tim_g = tm0.slots[APP_ATT_NAMES.index("tim")]  # page 0 → global == local
+    en_g = tm0.slots[APP_ATT_NAMES.index("en")]
+    timer_comp = next(c for c in hmi[0].components if c.lei == 51)
+    timer_id = int(timer_comp.attrs["id"])
+
+    gen = build_page_init_with_timer(tim_g, en_g, timer_id)
+    live = _live_page_init(data, a1, pd, objs, 0, hmi)
+
+    # Everything matches except the 4-byte L-marker address (offsets 35-38
+    # in the chain), which the assembler back-patches.
+    diffs = [i for i in range(min(len(gen), len(live))) if gen[i] != live[i]]
+    # The L address is `4c 20 03 <u32>`; locate the L marker and confirm the
+    # only diffs are inside its u32 addr field.
+    l_pos = gen.find(bytes.fromhex("4c2003"))
+    assert l_pos != -1
+    addr_range = set(range(l_pos + 3, l_pos + 7))
+    assert all(d in addr_range for d in diffs), (
+        f"unexpected page-0 page-init diffs outside the L addr: {diffs}"
+    )
+    # The reference L address is 0x0d90.
+    assert struct.unpack_from("<I", live, l_pos + 3)[0] == 0x0D90
