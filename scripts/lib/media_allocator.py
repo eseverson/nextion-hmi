@@ -73,12 +73,29 @@ def _txt_bytes(value) -> int:
 # a 0x40-byte runtime header (vs 0x10 in the source/C build) and lays out
 # *global-scope* (``vscope=1``) objects in a separate prefix slot instead of
 # inline in the page sequence.  See ``findings/next-steps.md`` (live fixture)
-# for the full reverse-engineering.
+# and me/miata-dash#37 (multi-global) for the full reverse-engineering.
 FRAME_PREFIX_D = 0x40
-# The global-scope object's prefix slot ends at this fixed offset minus the
-# page status-array size: vscope_objdatarampos = ``VSCOPE_SLOT_END - status``
-# (validated: page0 status 0x20 → 0x0c, page1 status 0x08 → 0x24).
+# Anchor for the per-page global-object region.  The first global on a page
+# lands at ``_VSCOPE_SLOT_END - status_g``, then successive globals STACK
+# UPWARD (each at ``prev + SIZEOF``).  ``status_g`` is the status-array size
+# computed over the page's NON-global object count (+1 for the page block):
+# ``4*ceil((num_objects - num_globals + 1)/4)``.  Validated byte-exact across
+# source/live (single global) + the 01_multi-global oracles (1..5 globals,
+# xfloat + Text).
 _VSCOPE_SLOT_END = 0x2C
+
+# Per-global contribution to the project-wide non-global shift (see
+# ``project_global_shift``).  A vscope=1 component pushes every page's
+# non-global region up by this much — EXCEPT the project's first global,
+# which is absorbed by the baseline prefix slot.  xfloat (59) = 0x18 = its
+# SIZEOF; Text (116) = 0x14 (its frame SIZEOF is 0x1c, but it contributes
+# only 0x14 to the shift — established from the single `global_mixed` Text
+# oracle; see #37).  Other global-capable types are unverified — fall back
+# to SIZEOF and flag.
+_GLOBAL_SHIFT_SIZE: dict[int, int] = {
+    59:  0x18,   # XFloat
+    116: 0x14,   # Text (≠ SIZEOF 0x1c; one-oracle value, see #37)
+}
 
 
 @dataclass
@@ -111,8 +128,33 @@ def _obj_advance(cursor: int, obj: MediaObject) -> int:
     return cursor
 
 
+def project_global_shift(pages) -> int:
+    """The project-wide constant added to EVERY 'D'-build page's non-global
+    region base.  Each ``vscope=1`` component instance (unique by objname,
+    in page order) pushes the non-global region up — EXCEPT the project's
+    first global, which the baseline prefix slot absorbs.
+
+    ``pages`` is the device-id-ordered :class:`hmi_model.HmiPageModel` list.
+    Returns 0 for a project with ≤1 distinct global (source/live), so the
+    single/zero-global path is unperturbed."""
+    seen: set[str] = set()
+    total = 0
+    first = True
+    for hp in pages:
+        for c in hp.components:
+            if c.attrs.get("vscope") == 1 and c.name not in seen:
+                seen.add(c.name)
+                if first:
+                    first = False          # first global → absorbed, no shift
+                else:
+                    total += _GLOBAL_SHIFT_SIZE.get(
+                        c.lei, SIZEOF_OBJDATA_T1.get(c.lei, 0))
+    return total
+
+
 def layout_page_frame(objects: list[MediaObject],
-                      frame_prefix: int = FRAME_PREFIX) -> MediaFrameLayout:
+                      frame_prefix: int = FRAME_PREFIX,
+                      project_shift: int = 0) -> MediaFrameLayout:
     """Compute every object's ``objdatarampos`` and the page's
     ``medatapos`` from the page's object list (page pseudo-component
     first), purely from component type + the ``txt`` lengths.
@@ -121,9 +163,27 @@ def layout_page_frame(objects: list[MediaObject],
     ``FRAME_PREFIX`` (0x10) for the source/C layout (every object inline,
     reproduces ``source/nextion.hmi.tft`` byte-for-byte), or
     ``FRAME_PREFIX_D`` (0x40) for the newer 'D' build, which pulls
-    ``vscope=1`` objects into a prefix slot and reserves a zero hole for the
-    pulled block ahead of the trailing non-visual cluster.
-    """
+    ``vscope=1`` objects into a separate per-page region.
+
+    ``project_shift`` (from :func:`project_global_shift`) is the constant the
+    'D' build adds to the non-global region base on every page because of the
+    project's globals beyond the first; 0 for ≤1-global projects.
+
+    'D'-build RAM layout (validated byte-exact on the 01_multi-global oracles
+    + source/live):
+
+      * **Globals** (``vscope=1``), in component order, occupy their own
+        region: the first lands at ``0x2c - status_g`` where
+        ``status_g = 4*ceil((n - num_globals + 1)/4)``; each next stacks
+        UPWARD at ``prev + SIZEOF`` (txt spill included).
+      * **Non-globals** start at ``frame_prefix + 4*ceil(n/4) + project_shift``
+        and run sequentially; when a global was pulled AND the page carries
+        Variables, a ``pulled``-size zero hole precedes the first trailing
+        non-visual (hotspot/timer/variable).
+
+    ``medatapos``/``frame_end`` describe the ON-DISK frame (which OMITS the
+    global blocks and carries NO project shift), so they are computed from a
+    separate disk cursor — unchanged from the single-global path."""
     n = len(objects)
     status = 4 * math.ceil(n / 4)
 
@@ -136,11 +196,9 @@ def layout_page_frame(objects: list[MediaObject],
             cursor = _obj_advance(cursor, obj)
         return MediaFrameLayout(positions, cursor, cursor - frame_prefix)
 
-    # Version 'D': global-scope (vscope) objects live in the prefix; the
-    # rest are sequential after the page block.  When a vscope was pulled
-    # AND the page carries variables, a zero hole the size of the pulled
-    # block precedes the first trailing non-visual (hotspot/timer/variable).
+    # Version 'D'.
     vs_idx = [i for i, o in enumerate(objects) if o.vscope]
+    num_globals = len(vs_idx)
     pulled = sum(SIZEOF_OBJDATA_T1.get(objects[i].lei, 0) for i in vs_idx)
     has_vars = any(o.lei == 52 for o in objects)
 
@@ -152,36 +210,50 @@ def layout_page_frame(objects: list[MediaObject],
                 break
 
     positions = [0] * n
-    # Prefix slots for vscope objects (stacked downward for multiples).
-    for k, i in enumerate(vs_idx):
-        positions[i] = _VSCOPE_SLOT_END - status \
-            - SIZEOF_OBJDATA_T1.get(objects[i].lei, 0) * k
 
-    cursor = frame_prefix + status
+    # Global region: first at 0x2c - status_g, then stack UPWARD by SIZEOF.
+    status_g = 4 * math.ceil((n - num_globals + 1) / 4)
+    g_cursor = _VSCOPE_SLOT_END - status_g
+    for i in vs_idx:
+        positions[i] = g_cursor
+        g_cursor = _obj_advance(g_cursor, objects[i])
+
+    # Non-global region: frame_prefix + status + project_shift, sequential,
+    # with the variables hole.  This is also the disk cursor MINUS the shift,
+    # so track the disk frame_end separately (globals omitted, no shift).
+    nonglob_base = frame_prefix + status + project_shift
+    disk_base = frame_prefix + status
+    cursor = nonglob_base
+    disk_cursor = disk_base
     for i, obj in enumerate(objects):
         if i in vs_idx:
             continue
         if i == hole_before:
             cursor += pulled
+            disk_cursor += pulled
         positions[i] = cursor
         cursor = _obj_advance(cursor, obj)
+        disk_cursor = _obj_advance(disk_cursor, obj)
 
-    return MediaFrameLayout(positions, cursor, cursor - frame_prefix)
+    return MediaFrameLayout(positions, disk_cursor, disk_cursor - frame_prefix)
 
 
-def layout_from_hmi_page(page, frame_prefix: int = FRAME_PREFIX) -> MediaFrameLayout:
+def layout_from_hmi_page(page, frame_prefix: int = FRAME_PREFIX,
+                         project_shift: int = 0) -> MediaFrameLayout:
     """Lay out a page's media frame from an :class:`hmi_model.HmiPageModel`.
 
     The page model's ``components`` already lead with the synthesised page
     pseudo-component (lei 121), matching objxinxi order.  ``frame_prefix``
-    selects the editor build (see :func:`layout_page_frame`)."""
+    selects the editor build (see :func:`layout_page_frame`); ``project_shift``
+    is the project-wide non-global base shift (see :func:`project_global_shift`),
+    relevant only to the 'D' build's multi-global pages."""
     objects: list[MediaObject] = []
     for i, hc in enumerate(page.components):
         # The page pseudo-component (index 0) carries no txt.
         txt = None if i == 0 else hc.attrs.get("txt")
         objects.append(MediaObject(lei=hc.lei, name=hc.name, txt=txt,
                                    vscope=hc.attrs.get("vscope") == 1))
-    return layout_page_frame(objects, frame_prefix)
+    return layout_page_frame(objects, frame_prefix, project_shift)
 
 
 __all__ = [
@@ -193,4 +265,5 @@ __all__ = [
     "MediaFrameLayout",
     "layout_page_frame",
     "layout_from_hmi_page",
+    "project_global_shift",
 ]

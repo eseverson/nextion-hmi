@@ -49,7 +49,9 @@ from scripts.lib.usercode_assembler import EVENT_LAYOUT, patch_l_markers
 from scripts.lib.hmi_model import (
     load_hmi_pages, build_page_name_hash_table, build_appallvas,
 )
-from scripts.lib.media_allocator import layout_from_hmi_page, FRAME_PREFIX
+from scripts.lib.media_allocator import (
+    layout_from_hmi_page, FRAME_PREFIX, project_global_shift,
+)
 from scripts.lib.media_blob_generator import (
     page_record_counts, build_page_init_chain,
 )
@@ -118,6 +120,8 @@ def assemble_usercode_and_layout(hmi, program_s, app_allvas_qty,
 
     sysvar_overrides = dict(profile.sysvar_overrides) if profile else None
     fp = profile.frame_prefix if profile else FRAME_PREFIX
+    # Project-wide non-global base shift (multi-global 'D' pages; me/miata-dash#37).
+    pshift = project_global_shift(hmi)
     header = build_header(hmi, program_s, app_allvas_qty,
                           sysvar_overrides=sysvar_overrides)
 
@@ -189,7 +193,7 @@ def assemble_usercode_and_layout(hmi, program_s, app_allvas_qty,
     static_str_beg = len(out)
     out += build_appallvas(program_s)
     for pi, hp in enumerate(hmi):
-        layout = layout_from_hmi_page(hp, fp)
+        layout = layout_from_hmi_page(hp, fp, pshift)
         for ci, hc in enumerate(hp.components):
             pa = hc.attrs
             x = 0 if ci == 0 else int(pa.get("x") or 0)
@@ -398,9 +402,10 @@ def compile_hmi(hmi_path, resources_source) -> bytes:
 
     # objxinxi table (geometry + GENERATED offsets + GENERATED attstr slots).
     fp = profile.frame_prefix
+    pshift = project_global_shift(hmi)
     obj_bytes = bytearray()
     for pi, hp in enumerate(hmi):
-        media = layout_from_hmi_page(hp, fp)
+        media = layout_from_hmi_page(hp, fp, pshift)
         for ci, (hc, cl) in enumerate(zip(hp.components, layouts[pi])):
             pa = hc.attrs
             x = 0 if ci == 0 else int(pa.get("x") or 0)

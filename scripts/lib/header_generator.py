@@ -103,11 +103,26 @@ def build_global_dir(pages, app_allvas_qty) -> bytes:
     assert len(out) == _TLV_BODY_END
     # region[1] @0x20: AppAllvas-values zeros + one vscope record per
     # global-scope page-instance.
+    #
+    # Ordinal rule (me/miata-dash#37): the record ordinal is the 1-based
+    # page-instance index of a *multi-page* global (one whose objname appears
+    # on >1 page — e.g. the project's shared ``x1`` on main+gauge gets 1, 2).
+    # A global that lives on a single page gets ordinal 0.  (Validated across
+    # the live fixture + the 01_multi-global oracles: x1 → 1,2; the gauge-only
+    # g0/g1/g2/t0 → 0.)
+    from collections import Counter
+    name_pages = Counter(c.name for c in instances)
+    per_name_seq: dict = {}
     region1 = bytearray(b"\x00" * (_REGION1_BASE + 4 * max(0, app_allvas_qty - 3)))
-    for i, c in enumerate(instances, start=1):
+    for c in instances:
         a = c.attrs
+        if name_pages[c.name] > 1:
+            per_name_seq[c.name] = per_name_seq.get(c.name, 0) + 1
+            ordinal = per_name_seq[c.name]
+        else:
+            ordinal = 0
         region1 += vscope_record(
-            i,
+            ordinal,
             int(a.get("bco") or 0), int(a.get("pco") or 0),
             int(a.get("xcen") or 0), int(a.get("ycen") or 0),
         )
