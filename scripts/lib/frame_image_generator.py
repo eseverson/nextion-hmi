@@ -234,11 +234,15 @@ PROJECT_BRUSH_STATE: dict[tuple[str, str], tuple[int, int]] = {
 }
 
 
-def build_frame_image(page) -> bytes:
+def build_frame_image(page, brush_state=None) -> bytes:
     """Generate one page's frame image from an ``hmi_model.HmiPageModel``.
 
     Layout: page block, then each object's ``<Kind>_PARAM`` block in order
-    (4-aligned, long-string spill matching the media allocator)."""
+    (4-aligned, long-string spill matching the media allocator).
+    ``brush_state`` is the per-project ``{(page_name, comp_name): (en,
+    backcolor)}`` editor draw-session scratch (from the CompilerProfile);
+    it defaults to the source fixture's :data:`PROJECT_BRUSH_STATE`."""
+    brush_map = PROJECT_BRUSH_STATE if brush_state is None else brush_state
     comps = page.components
     out = bytearray()
     out += build_page_block(len(comps), page.page_attrs)
@@ -250,7 +254,7 @@ def build_frame_image(page) -> bytes:
         # (it returns SIZEOF + round4(len+1) bytes for a spilled txt).
         out += build_object_block(hc.lei, hc.attrs)
         # Editor draw-session brush-state carry into a Text's reserved tail.
-        brush = PROJECT_BRUSH_STATE.get((page.name, hc.name))
+        brush = brush_map.get((page.name, hc.name))
         if brush is not None and hc.lei in PARAM_TK_STRUCTS:
             en, backcolor = brush
             # res3 @ block+25 (en, u8), res4 @ block+26 (backcolor, u16).

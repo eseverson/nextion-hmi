@@ -98,7 +98,8 @@ class ObjxinxiLayout:
         self.attstr_bytecode_offset = 0
 
 
-def assemble_usercode_and_layout(hmi, program_s, app_allvas_qty):
+def assemble_usercode_and_layout(hmi, program_s, app_allvas_qty,
+                                 profile=None):
     """Assemble the usercode region (strdataaddr..pageadd) from generated
     sub-regions and return ``(usercode_bytes, per_page_objxinxi_layout,
     page_dir_offsets, attstr_tables, static_str_beg)``.
@@ -108,11 +109,16 @@ def assemble_usercode_and_layout(hmi, program_s, app_allvas_qty):
     derived from ``static_str_beg`` (= AppAllvasAddr, computed here) +
     ``12*app_allvas_qty`` once the layout is fixed.  Offsets for the
     objxinxi / page-dir encoders are tracked as the event regions emit.
+    ``profile`` (a CompilerProfile) carries the editor-version constants
+    (setbrush opcode, sysvar overrides) + per-project scratch threaded into
+    the header MainCode and the per-component event chains.
     """
     from scripts.lib.header_generator import build_header
     from scripts.lib.hmi_model import APPALLVAS_RECORD_SIZE
 
-    header = build_header(hmi, program_s)
+    sysvar_overrides = dict(profile.sysvar_overrides) if profile else None
+    header = build_header(hmi, program_s, app_allvas_qty,
+                          sysvar_overrides=sysvar_overrides)
 
     counts = page_record_counts(hmi)
     cum = [sum(counts[:i]) for i in range(len(counts) + 1)]
@@ -135,7 +141,7 @@ def assemble_usercode_and_layout(hmi, program_s, app_allvas_qty):
         for hc, o in zip(hp.components, po):
             cc = build_component_chains(
                 hc, list(o.slots), base, page_bco, hp.page_id,
-                attr_offs, orefs.get(hc.name))
+                attr_offs, orefs.get(hc.name), profile=profile)
             comp_start = len(out)
             stream, _, slot_offsets = _emit_component_event(cc, comp_start)
             out += stream
@@ -160,7 +166,9 @@ def assemble_usercode_and_layout(hmi, program_s, app_allvas_qty):
         for k, cl in enumerate(var_layouts):
             cl.attstr_bytecode_offset = hexpos - 4 * (nvar - k)
 
-        media = _build_media_blob_for_page(hp, pi, counts, po, base)
+        brush_state = profile.brush_state if profile else None
+        media = _build_media_blob_for_page(hp, pi, counts, po, base,
+                                           brush_state)
         out += media
         # Page-record offset (relative to attdataaddr); the absolute
         # attdataaddr_rel is filled once static_str_beg is known, below.
@@ -229,10 +237,10 @@ def _generated_attstr_slots(hmi):
     return out
 
 
-def _build_media_blob_for_page(hp, pi, counts, po, base):
+def _build_media_blob_for_page(hp, pi, counts, po, base, brush_state=None):
     layout = layout_from_hmi_page(hp)
     name_hash = build_page_name_hash_table(hp, layout.medatapos)
-    frame = build_frame_image(hp)
+    frame = build_frame_image(hp, brush_state)
 
     def attr_record_lookup(comp_name, attr):
         # page-local record index (the attstr slot value) for the named
@@ -277,10 +285,17 @@ def _build_appinf1(resources_data, model_crc, hmi, program_s,
     # The resources descriptors come from the reference (resources-coupled).
     ref_body = body_description_from_tft(resources_data)
 
+    from scripts.lib.header_generator import (
+        build_global_dir, build_name_hash_table,
+    )
+
     counts = page_record_counts(hmi)
     page_qty = len(hmi)
     obj_qty = sum(len(p.components) for p in hmi)
-    main_code_hex = 0x34 + 6 * page_qty
+    # MainCode starts after the global memory directory + the leading u32 0
+    # marker + the page name-hash table.
+    main_code_hex = (len(build_global_dir(hmi, app_allvas_qty)) + 4
+                     + len(build_name_hash_table(hmi)))
 
     body = BodyDescription(
         model_crc=model_crc,
@@ -336,14 +351,23 @@ def compile_hmi(hmi_path, resources_source) -> bytes:
     from scripts.lib.hmi_model import parse_program_globals
     from sim.loader import load_hmi as _load_hmi_state
 
+    from scripts.lib.compiler_profile import profile_for, project_scratch_for
+
     data = Path(resources_source).read_bytes()
     model_crc = int.from_bytes(data[0x2E:0x32], "little")
 
     program_s = _load_hmi_state(str(hmi_path)).program_s
     hmi = load_hmi_pages(hmi_path)
     app_allvas_qty = len(parse_program_globals(program_s))
+
+    # Editor-version constants come from the reference TFT's H1 version
+    # letter; per-project editor scratch (S biaoji + Text brush state) is
+    # captured against this project's own reference (the oracle).
+    scratch = project_scratch_for(data, hmi)
+    profile = profile_for(data, **scratch)
+
     usercode, layouts, page_dir, attstr_tables, static_str_beg = \
-        assemble_usercode_and_layout(hmi, program_s, app_allvas_qty)
+        assemble_usercode_and_layout(hmi, program_s, app_allvas_qty, profile)
 
     # appinf1 (the H2 directory) is GENERATED from the assembled region
     # sizes + the resources descriptors pulled from ``resources_source``.

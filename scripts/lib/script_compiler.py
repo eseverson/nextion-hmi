@@ -139,16 +139,25 @@ class CompileContext:
     ``component_offsets``. This is the preferred path for new code —
     it derives offsets from the project's component layout rather than
     requiring the caller to enumerate every comp/attr pair."""
+    sysvar_overrides: dict[str, tuple[int, int]] = field(default_factory=dict)
+    """Per-name ``(size_class, index)`` overrides for system variables
+    whose numbering differs from the bundled instruction set (newer editor
+    versions insert sysvars, shifting later indices — e.g. ``baud`` moved
+    from size-4 index 0xe in nxt-1.65.1 to 0x1a in the live project's
+    1.67.x build).  Takes precedence over the instruction-set lookup."""
 
     def __post_init__(self):
         insn_set = _find_instruction_set(self.editor_version, self.model)
         self._op_lookup, self._sys_lookup = _build_lookup(insn_set)
 
     def is_sysvar(self, name: str) -> bool:
-        return name in self._sys_lookup
+        return name in self.sysvar_overrides or name in self._sys_lookup
 
     def sysvar_operand(self, name: str) -> bytes:
-        size_class, idx = self._sys_lookup[name]
+        if name in self.sysvar_overrides:
+            size_class, idx = self.sysvar_overrides[name]
+        else:
+            size_class, idx = self._sys_lookup[name]
         # `04 <size_class> <index_lo> <index_mid> <index_hi>` (24-bit idx)
         return bytes([SYSTEM_PREFIX, size_class,
                       idx & 0xff, (idx >> 8) & 0xff, (idx >> 16) & 0xff])

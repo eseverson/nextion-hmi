@@ -39,8 +39,18 @@ from scripts.lib.tft_init_encoder import encode_init_block, Component
 from scripts.lib.usercode_assembler import CompiledComponent, PROJECT_S_BIAOJI
 from scripts.lib.script_compiler import compile_event_handler, CompileContext
 
-# The project TFT (nxt-1.65.1) emits setbrush as `09 1c 08`.
-SETBRUSH_OVERRIDE = {"setbrush": bytes.fromhex("091c08")}
+# Default ``setbrush`` opcode head (nxt-1.65.1 / the source fixture); newer
+# editor builds shift it (see compiler_profile).  Used only when no
+# CompilerProfile is supplied.
+_DEFAULT_SETBRUSH_OPCODE = bytes.fromhex("091c08")
+SETBRUSH_OVERRIDE = {"setbrush": _DEFAULT_SETBRUSH_OPCODE}
+
+
+def _setbrush_override(profile):
+    """The ``encode_init_block`` opcode override for this profile's
+    ``setbrush`` head (defaulting to the source-fixture opcode)."""
+    head = profile.setbrush_opcode if profile else _DEFAULT_SETBRUSH_OPCODE
+    return {"setbrush": head}
 
 # Init-template attribute name → the attstr-table name that actually holds
 # its record (F-series pic/picc/bco aliasing).
@@ -77,22 +87,50 @@ def _overlaps(a, b):
 
 
 def page_overlap_refs(components):
-    """Return ``{comp_name: [other_id, ...]}`` — for each visual component,
-    the ids of the other visual components whose bounding box overlaps it
-    (in component order).  Each such id is appended as a ``ref`` to the
-    component's auto-fill."""
+    """Return ``{comp_name: [other_id, ...]}`` — for each visual component
+    that shares an overlap *cluster*, the ids of the OTHER cluster members
+    (ascending), appended as ``ref`` blocks to its auto-fill.
+
+    The editor groups overlapping components into connected components of
+    the bounding-box overlap graph (transitive closure): if A overlaps a
+    shared neighbour C and B also overlaps C, then A, B and C form one
+    cluster and each references the other two — even where A and B don't
+    directly overlap (e.g. the two bottom-corner hotspots that both sit on
+    the full-width status bar reference each other through it).  A redraw of
+    any cluster member then refreshes the whole group, resolving z-order.
+    """
     visual = [c for c in components if c.lei in _VISUAL_LEIS]
     boxes = {c.name: _box(c.attrs) for c in visual}
-    out = {}
-    for c in visual:
-        refs = []
-        for other in visual:
-            if other.name == c.name:
-                continue
+
+    # Union-find over the direct-overlap graph → overlap clusters.
+    parent = {c.name: c.name for c in visual}
+
+    def find(n):
+        while parent[n] != n:
+            parent[n] = parent[parent[n]]
+            n = parent[n]
+        return n
+
+    def union(a, b):
+        parent[find(a)] = find(b)
+
+    for i, c in enumerate(visual):
+        for other in visual[i + 1:]:
             if _overlaps(boxes[c.name], boxes[other.name]):
-                refs.append(int(other.attrs.get("id") or 0))
-        if refs:
-            out[c.name] = refs
+                union(c.name, other.name)
+
+    clusters: dict[str, list] = {}
+    for c in visual:
+        clusters.setdefault(find(c.name), []).append(c)
+
+    out = {}
+    for members in clusters.values():
+        if len(members) < 2:
+            continue
+        ids = {m.name: int(m.attrs.get("id") or 0) for m in members}
+        for m in members:
+            others = sorted(ids[o.name] for o in members if o.name != m.name)
+            out[m.name] = others
     return out
 
 _SLOT_NAME = APP_ATT_NAMES  # index → attribute name
@@ -160,16 +198,19 @@ def build_page_attr_offsets(components, per_page_objs, page_record_base):
     return offs
 
 
-def _compile_event(source, attr_offsets, *, with_s_marker=False):
+def _compile_event(source, attr_offsets, *, with_s_marker=False, profile=None):
     """Compile an HMI event script to its chain body, resolving
     ``<comp>.<attr>`` refs to global record indices.  ``with_s_marker``
-    prepends the project's captured ``S`` suspend marker (Timer)."""
-    ctx = CompileContext()
+    prepends the project's ``S`` suspend marker (Timer); its biaoji and any
+    sysvar-index overrides come from ``profile``."""
+    overrides = dict(profile.sysvar_overrides) if profile else {}
+    ctx = CompileContext(sysvar_overrides=overrides)
     ctx.component_offsets = dict(attr_offsets)
     ctx.globals = {"sys0": 0, "sys1": 4, "sys2": 8}
     body = compile_event_handler(source, ctx)
     if with_s_marker:
-        s_entry = _entry(b"\x53\x20\x03" + struct.pack("<I", PROJECT_S_BIAOJI))
+        biaoji = profile.s_biaoji if profile else PROJECT_S_BIAOJI
+        s_entry = _entry(b"\x53\x20\x03" + struct.pack("<I", biaoji))
         return s_entry + body
     return body
 
@@ -185,7 +226,8 @@ def _fill_with_refs(x, y, w, h, bco_record, overlap_ids):
 
 def build_component_chains(hc, attstr_slots, page_record_base,
                            page_bco_global, page_id,
-                           attr_offsets=None, overlap_ids=None) -> CompiledComponent:
+                           attr_offsets=None, overlap_ids=None,
+                           profile=None) -> CompiledComponent:
     """Build one component's per-slot chains for the event region.
 
     ``hc`` is the HMI component model; ``attstr_slots`` its attstr slot
@@ -195,7 +237,9 @@ def build_component_chains(hc, attstr_slots, page_record_base,
     ``attr_offsets`` is the page-wide ``{"<comp>.<attr>": global_record}``
     map used to compile event-script slots (Timer/Slider).  ``overlap_ids``
     are the ids of visual neighbours whose box overlaps this component (a
-    ``ref <id>`` is appended to the auto-fill for each).
+    ``ref <id>`` is appended to the auto-fill for each).  ``profile`` carries
+    the editor-version constants (setbrush opcode, sysvar overrides) and
+    per-project scratch (the Timer ``S`` biaoji).
     """
     lei = hc.lei
     a = hc.attrs
@@ -233,7 +277,8 @@ def build_component_chains(hc, attstr_slots, page_record_base,
         # Timer: slot 4 = the codestimer handler (with the S marker).
         src = hc.events.get("codestimer", "").strip()
         if src:
-            chains[4] = _compile_event(src, attr_offsets, with_s_marker=True)
+            chains[4] = _compile_event(src, attr_offsets, with_s_marker=True,
+                                       profile=profile)
         return CompiledComponent(lei=lei, chains=chains)
 
     if lei == 1:
@@ -242,7 +287,8 @@ def build_component_chains(hc, attstr_slots, page_record_base,
         for key, slot in _EVENT_SLOTS[1].items():
             src = hc.events.get(key, "").strip()
             if src:
-                chains[slot] = _compile_event(src, attr_offsets)
+                chains[slot] = _compile_event(src, attr_offsets,
+                                              profile=profile)
         return CompiledComponent(lei=lei, chains=chains)
 
     if lei == 98:
@@ -251,7 +297,8 @@ def build_component_chains(hc, attstr_slots, page_record_base,
         # release (val=0 + self-ref).
         comp = Component(comp_type=lei, comp_id=int(a.get("id") or 0),
                          page_id=page_id, x=x, y=y, w=w, h=h, attrs=a)
-        init = encode_init_block(comp, resolver, opcode_override=SETBRUSH_OVERRIDE)
+        init = encode_init_block(comp, resolver,
+                                 opcode_override=_setbrush_override(profile))
         if init:
             chains[0] = init
         chains[1] = _fill_with_refs(x, y, w, h, page_bco_global, overlap_ids)
@@ -260,12 +307,14 @@ def build_component_chains(hc, attstr_slots, page_record_base,
         # Self-refresh block: `ref <id>+long(65535)` (the button's redraw).
         self_ref = _entry(REF_OPCODE + str(bid).encode("ascii")
                           + b"+" + b"\x03" + struct.pack("<I", 0xFFFF))
-        down = _compile_event(f"{val_ref}=1", attr_offsets) + self_ref
+        down = _compile_event(f"{val_ref}=1", attr_offsets,
+                              profile=profile) + self_ref
         user = hc.events.get("codesdown", "").strip()
         if user:
-            down += _compile_event(user, attr_offsets)
+            down += _compile_event(user, attr_offsets, profile=profile)
         chains[2] = down
-        chains[3] = _compile_event(f"{val_ref}=0", attr_offsets) + self_ref
+        chains[3] = _compile_event(f"{val_ref}=0", attr_offsets,
+                                   profile=profile) + self_ref
         return CompiledComponent(lei=lei, chains=chains)
 
     # Display / interactive components: slot 0 = init draw, slot 1 =
@@ -274,7 +323,8 @@ def build_component_chains(hc, attstr_slots, page_record_base,
         comp_type=lei, comp_id=int(a.get("id") or 0), page_id=page_id,
         x=x, y=y, w=w, h=h, attrs=a,
     )
-    init = encode_init_block(comp, resolver, opcode_override=SETBRUSH_OVERRIDE)
+    init = encode_init_block(comp, resolver,
+                             opcode_override=_setbrush_override(profile))
     if init:
         chains[0] = init
     # The auto-fill exists for the display components that declare slot 1
