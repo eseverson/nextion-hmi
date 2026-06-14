@@ -96,18 +96,20 @@ class ObjxinxiLayout:
         self.attstr_bytecode_offset = 0
 
 
-def assemble_usercode_and_layout(hmi, data, a1, program_s):
+def assemble_usercode_and_layout(hmi, program_s, app_allvas_qty):
     """Assemble the usercode region (strdataaddr..pageadd) from generated
     sub-regions and return ``(usercode_bytes, per_page_objxinxi_layout,
-    page_dir_offsets)``.
+    page_dir_offsets, attstr_tables, static_str_beg)``.
 
     The header (global dir + page name-hash + MainCode) is GENERATED from
-    the HMI + ``Program.s``.  Offsets needed by the objxinxi / page-dir
-    encoders are tracked as the event regions are emitted.
+    the HMI + ``Program.s``; the page-directory ``attdataaddr_rel`` is
+    derived from ``static_str_beg`` (= AppAllvasAddr, computed here) +
+    ``12*app_allvas_qty`` once the layout is fixed.  Offsets for the
+    objxinxi / page-dir encoders are tracked as the event regions emit.
     """
     from scripts.lib.header_generator import build_header
+    from scripts.lib.hmi_model import APPALLVAS_RECORD_SIZE
 
-    strd = a1["strdataaddr"]
     header = build_header(hmi, program_s)
 
     counts = page_record_counts(hmi)
@@ -118,10 +120,7 @@ def assemble_usercode_and_layout(hmi, data, a1, program_s):
 
     out = bytearray(header)
     page_layouts: list[list[ObjxinxiLayout]] = []
-    page_dir = []   # (hexpos, attdataaddr_rel) per page
-
-    # attdataaddr_rel for page 0 (strd-relative binattinf start).
-    attdata0 = a1["attdataaddr"]
+    page_dir = []   # (hexpos, page_record_offset) per page
 
     for pi, hp in enumerate(hmi):
         po = attstr[pi]   # objects exposing generated .slots
@@ -161,10 +160,14 @@ def assemble_usercode_and_layout(hmi, data, a1, program_s):
 
         media = _build_media_blob_for_page(hp, pi, counts, po, base)
         out += media
-        attdata_rel = attdata0 + sum(counts[:pi]) * 24
-        page_dir.append((hexpos, attdata_rel))
+        # Page-record offset (relative to attdataaddr); the absolute
+        # attdataaddr_rel is filled once static_str_beg is known, below.
+        page_dir.append((hexpos, sum(counts[:pi]) * 24))
 
-    # AppAllvas + binattinf tail.
+    # AppAllvas + binattinf tail.  ``static_str_beg`` (= AppAllvasAddr) is
+    # the usercode-relative offset where the static-data region begins —
+    # i.e. the total init-bytecode size (header + per-page event+media).
+    static_str_beg = len(out)
     out += build_appallvas(program_s)
     for pi, hp in enumerate(hmi):
         layout = layout_from_hmi_page(hp)
@@ -180,9 +183,17 @@ def assemble_usercode_and_layout(hmi, data, a1, program_s):
                 frompageid=hp.page_id, fromobjid=ci,
                 authored=pa, allow_unverified=True)
 
+    # Now that static_str_beg is known, resolve the page-directory
+    # ``attdataaddr_rel`` for each page:
+    #   attdataaddr (strd-rel) = static_str_beg + 12*app_allvas_qty
+    #   attdataaddr_rel[page]  = attdataaddr + page_record_offset
+    attdataaddr = static_str_beg + APPALLVAS_RECORD_SIZE * app_allvas_qty
+    page_dir = [(hexpos, attdataaddr + rec_off)
+                for (hexpos, rec_off) in page_dir]
+
     # Patch the timer L re-arm markers now the layout is fixed.
     out = bytearray(patch_l_markers(bytes(out), region_base=0))
-    return bytes(out), page_layouts, page_dir, attstr
+    return bytes(out), page_layouts, page_dir, attstr, static_str_beg
 
 
 # --- generated attstr slots -----------------------------------------------
@@ -233,6 +244,64 @@ def _build_media_blob_for_page(hp, pi, counts, po, base):
     return name_hash + frame + page_init
 
 
+def _build_appinf1(resources_data, model_crc, hmi, program_s,
+                   app_allvas_qty, static_str_beg):
+    """Build the GENERATED ``appinf1`` (H2 directory) via
+    :func:`compute_appinf1.compute_appinf1`.
+
+    Field origins:
+
+    * **Content fields — derived from the HMI + assembled region sizes:**
+      - ``init_bytecode_size`` = ``static_str_beg`` (= AppAllvasAddr — the
+        usercode size up to the static-data region, returned by the
+        assembler);
+      - ``app_allvas_qty`` = number of ``Program.s`` ``int`` globals;
+      - ``attribute_records_bytes`` = ``sum(per-page record counts) * 24``;
+      - ``page_qty`` / ``obj_qty`` = page / total-component counts;
+      - ``main_code_hex`` = the header's MainCode offset
+        (``0x34`` global dir + ``6 * page_qty`` name-hash bytes).
+
+    * **Resources-coupled fields — pulled from ``resources_source`` (part
+      of the out-of-scope resources blob):** ``resources_size``,
+      ``picxinxi_offset_in_resources``, the picture / font descriptors, and
+      the ``encode`` byte.  These describe the bootloader/driver/font
+      composition, not the HMI project content.
+    """
+    from scripts.lib.compute_appinf1 import (
+        compute_appinf1, body_description_from_tft, BodyDescription,
+    )
+    from scripts.lib.media_blob_generator import page_record_counts
+
+    # The resources descriptors come from the reference (resources-coupled).
+    ref_body = body_description_from_tft(resources_data)
+
+    counts = page_record_counts(hmi)
+    page_qty = len(hmi)
+    obj_qty = sum(len(p.components) for p in hmi)
+    main_code_hex = 0x34 + 6 * page_qty
+
+    body = BodyDescription(
+        model_crc=model_crc,
+        encode=ref_body.encode,
+        main_code_hex=main_code_hex,
+        # --- resources-coupled (from resources_source) ---
+        resources_size=ref_body.resources_size,
+        picxinxi_offset_in_resources=ref_body.picxinxi_offset_in_resources,
+        pictures=ref_body.pictures,
+        fonts=ref_body.fonts,
+        gmovs=ref_body.gmovs,
+        videos=ref_body.videos,
+        wavs=ref_body.wavs,
+        # --- content (derived from the HMI + assembled region sizes) ---
+        init_bytecode_size=static_str_beg,
+        app_allvas_qty=app_allvas_qty,
+        attribute_records_bytes=sum(counts) * 24,
+        page_qty=page_qty,
+        obj_qty=obj_qty,
+    )
+    return compute_appinf1(body)
+
+
 def compile_hmi(hmi_path, resources_source) -> bytes:
     """Compile ``hmi_path`` into a complete ``.tft``, returning the bytes.
 
@@ -251,10 +320,6 @@ def compile_hmi(hmi_path, resources_source) -> bytes:
     (the resources blob is explicitly out of scope; see me/nextion#2).
     """
     from pathlib import Path
-    from scripts.lib.tft_attrs import (
-        parse_appinf1_corrected, parse_page_directory,
-    )
-    from scripts.lib.h2_cipher import encrypt as h2_decrypt
     from scripts.lib.objxinxi_encoder import (
         encode_objxinxi_entry, ObjxinxiInputs,
     )
@@ -262,16 +327,23 @@ def compile_hmi(hmi_path, resources_source) -> bytes:
     from scripts.lib.media_allocator import layout_from_hmi_page
     from scripts.lib import tft_format
     from scripts.lib.page_crc import crc32_bytewise
+    from scripts.lib.hmi_model import parse_program_globals
     from sim.loader import load_hmi as _load_hmi_state
 
     data = Path(resources_source).read_bytes()
     model_crc = int.from_bytes(data[0x2E:0x32], "little")
-    a1 = parse_appinf1_corrected(h2_decrypt(data[0xC8:0xC8 + 196], model_crc))
 
     program_s = _load_hmi_state(str(hmi_path)).program_s
     hmi = load_hmi_pages(hmi_path)
-    usercode, layouts, page_dir, attstr_tables = assemble_usercode_and_layout(
-        hmi, data, a1, program_s)
+    app_allvas_qty = len(parse_program_globals(program_s))
+    usercode, layouts, page_dir, attstr_tables, static_str_beg = \
+        assemble_usercode_and_layout(hmi, program_s, app_allvas_qty)
+
+    # appinf1 (the H2 directory) is GENERATED from the assembled region
+    # sizes + the resources descriptors pulled from ``resources_source``.
+    appinf1 = _build_appinf1(
+        data, model_crc, hmi, program_s, app_allvas_qty, static_str_beg)
+    a1 = appinf1.fields
 
     # objxinxi table (geometry + GENERATED offsets + GENERATED attstr slots).
     obj_bytes = bytearray()
@@ -293,7 +365,6 @@ def compile_hmi(hmi_path, resources_source) -> bytes:
 
     # page directory (object counts + generated hexpos/attdataaddr_rel;
     # medatapos generated).
-    pd = parse_page_directory(data, a1["pageadd"], a1["pageqyt"])
     pdir_bytes = bytearray()
     objstar = 0
     for pi, hp in enumerate(hmi):
@@ -306,10 +377,13 @@ def compile_hmi(hmi_path, resources_source) -> bytes:
         objstar += len(hp.components)
 
     # Assemble the whole file over the resources source: the prefix
-    # [0..strdataaddr) — H1/H2/appinf framing + the out-of-scope resources
-    # blob — is kept; every project-content region after it is GENERATED.
+    # [0..strdataaddr) — H1 framing + the out-of-scope resources blob — is
+    # kept; the H2/appinf directory and every project-content region after
+    # strdataaddr are GENERATED.
     out = bytearray(data)
     strd = a1["strdataaddr"]
+    # GENERATED appinf1 directory (encrypted H2 at file offset 0xC8).
+    out[0xC8:0xC8 + 196] = appinf1.encrypted
     out[strd:a1["pageadd"]] = usercode
     out[a1["pageadd"]:a1["pageadd"] + len(pdir_bytes)] = pdir_bytes
     out[a1["objxinxiadd"]:a1["objxinxiadd"] + len(obj_bytes)] = obj_bytes

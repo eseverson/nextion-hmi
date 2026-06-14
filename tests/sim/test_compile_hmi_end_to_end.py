@@ -77,3 +77,72 @@ def test_only_resources_prefix_is_reference_derived():
         "content past the resources prefix is NOT fully generated "
         "(it changed when the reference's usercode region was zeroed)"
     )
+
+
+def test_generated_appinf1_equals_reference():
+    """The GENERATED appinf1 (H2 directory) equals the reference's — every
+    content field (staticstrBeg / attdataaddr / pageadd / objxinxiadd /
+    page+obj counts / MainCodeHex / AppAllvasQty) is *derived* from the HMI
+    + the assembled region sizes, not copied.  The encrypted 196-byte H2
+    block must match byte-for-byte."""
+    from scripts.lib.compile_hmi import (
+        assemble_usercode_and_layout, _build_appinf1,
+    )
+    from scripts.lib.hmi_model import load_hmi_pages, parse_program_globals
+    from sim.loader import load_hmi
+
+    ref = TFT_PATH.read_bytes()
+    model_crc = int.from_bytes(ref[0x2E:0x32], "little")
+    live_h2 = ref[0xC8:0xC8 + 196]
+
+    program_s = load_hmi(str(HMI_PATH)).program_s
+    hmi = load_hmi_pages(HMI_PATH)
+    qty = len(parse_program_globals(program_s))
+    _, _, _, _, static_str_beg = assemble_usercode_and_layout(
+        hmi, program_s, qty)
+    gen = _build_appinf1(ref, model_crc, hmi, program_s, qty, static_str_beg)
+
+    # Every content field equals the reference's parsed value.
+    live = parse_appinf1_corrected(h2_decrypt(live_h2, model_crc))
+    for key in ("staticstrBeg", "AppAllvasAddr", "AppAllvasQty",
+                "attdataaddr", "strdataaddr", "pageadd", "objxinxiadd",
+                "MainCodeHex", "pageqyt", "objqyt", "picqyt", "zimoqyt"):
+        assert gen.fields[key] == live[key], (
+            f"appinf1.{key}: generated {gen.fields[key]:#x} "
+            f"!= reference {live[key]:#x}"
+        )
+    # And the encrypted H2 block is byte-identical.
+    assert gen.encrypted == live_h2, "generated H2 (appinf1) != reference"
+
+
+def test_appinf1_offsets_self_consistent_with_assembly():
+    """The GENERATED appinf1 offsets point exactly where the assembled
+    regions land — the invariant that makes the directory correct under a
+    STRUCTURAL edit (added/removed components change the region sizes, and
+    the derived offsets follow).  Checks:
+
+        strdataaddr + len(usercode)        == pageadd
+        pageadd     + 16*pageqyt           == objxinxiadd
+        objxinxiadd + 232*objqyt           == file_size - 4 (trailing CRC)
+        AppAllvasAddr + 12*AppAllvasQty    == attdataaddr
+    """
+    from scripts.lib.compile_hmi import (
+        assemble_usercode_and_layout, _build_appinf1,
+    )
+    from scripts.lib.hmi_model import load_hmi_pages, parse_program_globals
+    from sim.loader import load_hmi
+
+    ref = TFT_PATH.read_bytes()
+    model_crc = int.from_bytes(ref[0x2E:0x32], "little")
+
+    program_s = load_hmi(str(HMI_PATH)).program_s
+    hmi = load_hmi_pages(HMI_PATH)
+    qty = len(parse_program_globals(program_s))
+    usercode, _, _, _, static_str_beg = assemble_usercode_and_layout(
+        hmi, program_s, qty)
+    f = _build_appinf1(ref, model_crc, hmi, program_s, qty, static_str_beg).fields
+
+    assert f["strdataaddr"] + len(usercode) == f["pageadd"]
+    assert f["pageadd"] + 16 * f["pageqyt"] == f["objxinxiadd"]
+    assert f["objxinxiadd"] + 232 * f["objqyt"] == len(ref) - 4
+    assert f["AppAllvasAddr"] + 12 * f["AppAllvasQty"] == f["attdataaddr"]
