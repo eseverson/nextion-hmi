@@ -59,6 +59,7 @@ from scripts.lib.frame_image_generator import build_frame_image
 from scripts.lib.binattinf_generator import build_component_binattinf
 from scripts.lib.event_region_generator import (
     build_component_chains, build_page_attr_offsets, page_overlap_refs,
+    page_global_text_refs,
 )
 from scripts.lib.tft_attrs_encoder import APP_ATT_NAMES
 
@@ -141,13 +142,15 @@ def assemble_usercode_and_layout(hmi, program_s, app_allvas_qty,
         page_bco = base + po[0].slots[APP_ATT_NAMES.index("bco")]
         attr_offs = build_page_attr_offsets(hp.components, po, base)
         orefs = page_overlap_refs(hp.components)
+        gtrefs = page_global_text_refs(hp.components)
 
         comp_layouts = []
         var_end_cursor = None   # cursor right after the last Variable emitted
         for hc, o in zip(hp.components, po):
             cc = build_component_chains(
                 hc, list(o.slots), base, page_bco, hp.page_id,
-                attr_offs, orefs.get(hc.name), profile=profile)
+                attr_offs, orefs.get(hc.name), profile=profile,
+                prefix_ids=gtrefs.get(hc.name))
             comp_start = len(out)
             stream, _, slot_offsets = _emit_component_event(cc, comp_start)
             out += stream

@@ -133,6 +133,45 @@ def page_overlap_refs(components):
             out[m.name] = others
     return out
 
+
+def page_global_text_refs(components):
+    """Return ``{comp_name: [other_id, ...]}`` — the EXTRA refresh-ref prefix
+    a component's auto-fill gets *ahead of* its transitive-cluster refs
+    (:func:`page_overlap_refs`) when a **global Text** is in play.
+
+    Reverse-engineered from the ``global_mixed`` oracle (me/miata-dash#35/#37):
+    for each NON-global component ``N`` whose direct-overlap group ``{N} ∪
+    {boxes that overlap N}`` contains a ``vscope=1`` Text, every NON-Text
+    member ``m`` of that group gets a prefix ``group\\{m}`` (ids ascending)
+    prepended to its auto-fill refs.  This is the editor's extra z-order pass
+    for a global Text sharing space with numeric components; it fires ONLY
+    when a global Text overlaps a non-global, so single/zero-global pages and
+    all-numeric multi-global pages (source/live/nextion/3global) are
+    unaffected (empty result).
+    """
+    visual = [c for c in components if c.lei in _VISUAL_LEIS]
+    boxes = {c.name: _box(c.attrs) for c in visual}
+    ids = {c.name: int(c.attrs.get("id") or 0) for c in visual}
+    is_global = {c.name: c.attrs.get("vscope") == 1 for c in visual}
+    is_text = {c.name: c.lei == 116 for c in visual}
+    is_global_text = {c.name: is_text[c.name] and is_global[c.name]
+                      for c in visual}
+
+    out: dict[str, list] = {}
+    for n in visual:
+        if is_global[n.name]:
+            continue
+        group = {n.name} | {o.name for o in visual
+                            if o.name != n.name
+                            and _overlaps(boxes[n.name], boxes[o.name])}
+        if not any(is_global_text[m] for m in group):
+            continue
+        for m in group:
+            if is_text[m]:
+                continue
+            out[m] = sorted(ids[o] for o in group if o != m)
+    return out
+
 _SLOT_NAME = APP_ATT_NAMES  # index → attribute name
 
 
@@ -220,11 +259,14 @@ def _compile_event(source, attr_offsets, *, with_s_marker=False, profile=None):
     return body
 
 
-def _fill_with_refs(x, y, w, h, bco_record, overlap_ids):
-    """Auto-fill block + a ``ref <id>`` entry for each overlapping
-    neighbour."""
+def _fill_with_refs(x, y, w, h, bco_record, overlap_ids, prefix_ids=()):
+    """Auto-fill block + a ``ref <id>`` entry for each neighbour.
+
+    ``prefix_ids`` (the global-Text z-order prefix, see
+    :func:`page_global_text_refs`) are emitted FIRST, then the transitive
+    overlap-cluster ``overlap_ids``."""
     out = _fill_chain(x, y, w, h, bco_record)
-    for oid in overlap_ids:
+    for oid in tuple(prefix_ids) + tuple(overlap_ids):
         out += _entry(REF_OPCODE + str(oid).encode("ascii"))
     return out
 
@@ -232,7 +274,7 @@ def _fill_with_refs(x, y, w, h, bco_record, overlap_ids):
 def build_component_chains(hc, attstr_slots, page_record_base,
                            page_bco_global, page_id,
                            attr_offsets=None, overlap_ids=None,
-                           profile=None) -> CompiledComponent:
+                           profile=None, prefix_ids=None) -> CompiledComponent:
     """Build one component's per-slot chains for the event region.
 
     ``hc`` is the HMI component model; ``attstr_slots`` its attstr slot
@@ -242,9 +284,11 @@ def build_component_chains(hc, attstr_slots, page_record_base,
     ``attr_offsets`` is the page-wide ``{"<comp>.<attr>": global_record}``
     map used to compile event-script slots (Timer/Slider).  ``overlap_ids``
     are the ids of visual neighbours whose box overlaps this component (a
-    ``ref <id>`` is appended to the auto-fill for each).  ``profile`` carries
-    the editor-version constants (setbrush opcode, sysvar overrides) and
-    per-project scratch (the Timer ``S`` biaoji).
+    ``ref <id>`` is appended to the auto-fill for each); ``prefix_ids`` are
+    the global-Text z-order refs emitted *ahead* of them (see
+    :func:`page_global_text_refs`).  ``profile`` carries the editor-version
+    constants (setbrush opcode, sysvar overrides) and per-project scratch
+    (the Timer ``S`` biaoji).
     """
     lei = hc.lei
     a = hc.attrs
@@ -255,6 +299,7 @@ def build_component_chains(hc, attstr_slots, page_record_base,
     resolver = make_attr_resolver(attstr_slots, page_record_base, page_bco_global)
     attr_offsets = attr_offsets or {}
     overlap_ids = overlap_ids or []
+    prefix_ids = prefix_ids or []
     chains: dict[int, bytes] = {}
 
     if lei == 121:
@@ -268,7 +313,7 @@ def build_component_chains(hc, attstr_slots, page_record_base,
     if lei == 109:
         # Hotspot: slot 1 = press-highlight fill (own geometry, page_bco)
         # + overlap refs; slot 2 = navigation compiled from codesdown.
-        chains[1] = _fill_with_refs(x, y, w, h, page_bco_global, overlap_ids)
+        chains[1] = _fill_with_refs(x, y, w, h, page_bco_global, overlap_ids, prefix_ids)
         nav = hc.events.get("codesdown", "").strip()
         if nav.startswith("page "):
             chains[2] = _page_chain(int(nav.split()[1]))
@@ -288,7 +333,7 @@ def build_component_chains(hc, attstr_slots, page_record_base,
 
     if lei == 1:
         # Slider: slot 1 = auto-fill; slots 2/3/4 = codesdown/up/slide.
-        chains[1] = _fill_with_refs(x, y, w, h, page_bco_global, overlap_ids)
+        chains[1] = _fill_with_refs(x, y, w, h, page_bco_global, overlap_ids, prefix_ids)
         for key, slot in _EVENT_SLOTS[1].items():
             src = hc.events.get(key, "").strip()
             if src:
@@ -306,7 +351,7 @@ def build_component_chains(hc, attstr_slots, page_record_base,
                                  opcode_override=_setbrush_override(profile))
         if init:
             chains[0] = init
-        chains[1] = _fill_with_refs(x, y, w, h, page_bco_global, overlap_ids)
+        chains[1] = _fill_with_refs(x, y, w, h, page_bco_global, overlap_ids, prefix_ids)
         bid = int(a.get("id") or 0)
         val_ref = f"{hc.name}.val"
         # Self-refresh block: `ref <id>+long(65535)` (the button's redraw).
@@ -334,7 +379,7 @@ def build_component_chains(hc, attstr_slots, page_record_base,
         chains[0] = init
     # The auto-fill exists for the display components that declare slot 1
     # in EVENT_LAYOUT (XFloat/Text/Prog/Button), plus overlap refs.
-    chains[1] = _fill_with_refs(x, y, w, h, page_bco_global, overlap_ids)
+    chains[1] = _fill_with_refs(x, y, w, h, page_bco_global, overlap_ids, prefix_ids)
     return CompiledComponent(lei=lei, chains=chains)
 
 

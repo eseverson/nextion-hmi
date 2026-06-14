@@ -361,8 +361,15 @@ def build_component_binattinf(
     # when it spills into the media-frame tail (see _txt_merrylenth).
     txt_merrylenth = None
     if lei in INLINE_TXT_BUFFER:
+        inline_buf = INLINE_TXT_BUFFER[lei]
+        # A GLOBAL (vscope=1) Text stores its txt in the 20-byte global-memory
+        # record whose inline budget is 11 (not the 16 a page-frame Text has);
+        # its binattinf txt capacity / Strlenth follow that (me/miata-dash#35:
+        # global_mixed's t0 → merrylenth 11, txt_maxl 10).
+        if lei == 116 and authored.get("vscope") == 1:
+            inline_buf = 11
         txt_merrylenth = _txt_merrylenth(
-            INLINE_TXT_BUFFER[lei], authored.get("txt"),
+            inline_buf, authored.get("txt"),
             authored.get("txt_maxl"))
 
     # datafrom (RAM-backed) render records: attmemorypos = frame offset.
