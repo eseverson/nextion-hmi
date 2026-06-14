@@ -427,27 +427,64 @@ def compile_hmi(hmi_path, resources_source) -> bytes:
                           medatapos=medatapos))
         objstar += len(hp.components)
 
-    # Assemble the whole file over the resources source: the prefix
-    # [0..strdataaddr) — H1 framing + the out-of-scope resources blob — is
-    # kept; the H2/appinf directory and every project-content region after
-    # strdataaddr are GENERATED.
-    out = bytearray(data)
+    # Assemble the whole file by RE-LAYING-OUT it at the new size.  Only
+    # the resources prefix [0..strdataaddr) is taken from the resources
+    # source (H1 framing + the out-of-scope fonts/pictures blob); every
+    # project-content region after strdataaddr is GENERATED and placed
+    # SEQUENTIALLY at the NEW offsets the generated appinf1 derives from
+    # the assembled region sizes.  When the HMI structure is unchanged the
+    # new offsets all equal the reference ones, so the output is
+    # byte-identical (the regression invariant) — this is NOT special-cased,
+    # it falls out of the general re-layout.
     strd = a1["strdataaddr"]
-    # GENERATED appinf1 directory (encrypted H2 at file offset 0xC8).
-    out[0xC8:0xC8 + 196] = appinf1.encrypted
-    out[strd:a1["pageadd"]] = usercode
-    out[a1["pageadd"]:a1["pageadd"] + len(pdir_bytes)] = pdir_bytes
-    out[a1["objxinxiadd"]:a1["objxinxiadd"] + len(obj_bytes)] = obj_bytes
-    assert len(out) == len(data)
 
-    # Reseal H1, H2, trailing CRCs.
+    out = bytearray(data[:strd])      # resources prefix (verbatim)
+    # GENERATED appinf1 directory (encrypted H2 at file offset 0xC8) — its
+    # region offsets/counts already follow the NEW sizes.
+    out[0xC8:0xC8 + 196] = appinf1.encrypted
+
+    # Sequentially: usercode, page directory, objxinxi table.  These land
+    # exactly where the generated appinf1 says they do.
+    new_pageadd = strd + len(usercode)
+    new_objxinxiadd = new_pageadd + len(pdir_bytes)
+    assert new_pageadd == a1["pageadd"], (
+        f"layout mismatch: pageadd {new_pageadd:#x} != appinf1 {a1['pageadd']:#x}")
+    assert new_objxinxiadd == a1["objxinxiadd"], (
+        f"layout mismatch: objxinxiadd {new_objxinxiadd:#x} "
+        f"!= appinf1 {a1['objxinxiadd']:#x}")
+    out += usercode
+    out += pdir_bytes
+    out += obj_bytes
+
+    # Trailing alignment pad + 4-byte CRC.  The editor pads the body up to
+    # a 4-byte boundary with 0xff before the trailing CRC (source: objxinxi
+    # end already 4-aligned → no pad; live: 1 short → 3-byte 0xff pad).
+    # Reverse that exact rule so the same-structure case matches.
+    body_end = len(out)                       # == objxinxiadd + 232*objqyt
+    crc_off = (body_end + 3) & ~3             # align up to 4
+    out += b"\xff" * (crc_off - body_end)
+    out += b"\x00\x00\x00\x00"               # CRC placeholder
+    new_size = len(out)
+
+    # H1 carries file_size at 0x3c; it MUST track the new total (and it
+    # feeds the trailing-CRC XOR mask, below).
+    struct.pack_into("<I", out, 0x3c, new_size)
+
+    # Reseal H1, H2, trailing CRCs over the freshly-laid-out file.
     h1 = crc32_bytewise(0xFFFFFFFF, bytes(out[tft_format.H1_START:tft_format.H1_END]))
     out[tft_format.H1_CRC_OFF:tft_format.H1_CRC_OFF + 4] = struct.pack("<I", h1)
     h2 = crc32_bytewise(0xFFFFFFFF, bytes(out[tft_format.H2_START:tft_format.H2_END]))
     out[tft_format.H2_CRC_OFF:tft_format.H2_CRC_OFF + 4] = struct.pack("<I", h2)
-    info = tft_format.trailing_crc_mask(data)
+    # Trailing CRC: CRC32-MPEG2 over file[:-4] XOR (file[0x03]^file[0x2e]^
+    # file[0x3c]) — editor_vendor ^ model_crc low byte ^ file_size low byte
+    # (achmi.dll subcmd 0x23; see findings/format-tft.md).  We DERIVE the
+    # mask from the freshly-laid-out header rather than recovering it from
+    # the reference, so a size change (new file[0x3c]) is reflected.  For an
+    # unchanged structure the size is identical and the mask matches the
+    # reference's recovered value.
+    mask = out[0x03] ^ out[0x2e] ^ out[0x3c]
     body = crc32_bytewise(0xFFFFFFFF, bytes(out[:-4]))
-    out[-4:] = struct.pack("<I", (body ^ info.mask) & 0xFFFFFFFF)
+    out[-4:] = struct.pack("<I", (body ^ mask) & 0xFFFFFFFF)
     return bytes(out)
 
 
