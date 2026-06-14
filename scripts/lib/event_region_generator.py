@@ -36,7 +36,8 @@ import struct
 
 from scripts.lib.tft_attrs_encoder import APP_ATT_NAMES
 from scripts.lib.tft_init_encoder import encode_init_block, Component
-from scripts.lib.usercode_assembler import CompiledComponent
+from scripts.lib.usercode_assembler import CompiledComponent, PROJECT_S_BIAOJI
+from scripts.lib.script_compiler import compile_event_handler, CompileContext
 
 # The project TFT (nxt-1.65.1) emits setbrush as `09 1c 08`.
 SETBRUSH_OVERRIDE = {"setbrush": bytes.fromhex("091c08")}
@@ -53,6 +54,12 @@ ATTR_ALIASES = {
 FILL_OPCODE = bytes.fromhex("090d04")
 # page opcode (hotspot nav) — `09 0b 04`.
 PAGE_OPCODE = bytes.fromhex("090b04")
+# ref opcode (refresh) — `09 03 04`.  A Text whose txt overflows its inline
+# buffer gets a `ref <len+1>` appended to its auto-fill (slot 1) — the
+# marquee/long-string redraw.
+REF_OPCODE = bytes.fromhex("090304")
+# Text inline txt buffer (bytes); a txt whose len+1 exceeds it spills.
+TEXT_INLINE_BUFFER = 16
 
 _SLOT_NAME = APP_ATT_NAMES  # index → attribute name
 
@@ -94,14 +101,56 @@ def _page_chain(target_page_id: int) -> bytes:
     return _entry(body)
 
 
+# HMI event-script slot mapping per component type (codes* key → slot).
+_EVENT_SLOTS = {
+    1:   {"codesdown": 2, "codesup": 3, "codesslide": 4},   # Slider
+    51:  {"codestimer": 4},                                  # Timer
+}
+
+
+def build_page_attr_offsets(components, per_page_objs, page_record_base):
+    """Build a ``{"<comp>.<attr>": global_record_index}`` map for every
+    component-attribute ref an event script on the page might use.
+
+    ``components`` is the HMI page's component list; ``per_page_objs`` the
+    matching objxinxi entries (for the attstr slot tables); the indices
+    align.  Event scripts reference attributes by their GLOBAL binattinf
+    record index (the value the ``LOAD`` operand carries).
+    """
+    offs = {}
+    for hc, o in zip(components, per_page_objs):
+        for ai, attr in enumerate(APP_ATT_NAMES):
+            rec = o.slots[ai]
+            if rec != 0xFFFF:
+                offs[f"{hc.name}.{attr}"] = page_record_base + rec
+    return offs
+
+
+def _compile_event(source, attr_offsets, *, with_s_marker=False):
+    """Compile an HMI event script to its chain body, resolving
+    ``<comp>.<attr>`` refs to global record indices.  ``with_s_marker``
+    prepends the project's captured ``S`` suspend marker (Timer)."""
+    ctx = CompileContext()
+    ctx.component_offsets = dict(attr_offsets)
+    ctx.globals = {"sys0": 0, "sys1": 4, "sys2": 8}
+    body = compile_event_handler(source, ctx)
+    if with_s_marker:
+        s_entry = _entry(b"\x53\x20\x03" + struct.pack("<I", PROJECT_S_BIAOJI))
+        return s_entry + body
+    return body
+
+
 def build_component_chains(hc, attstr_slots, page_record_base,
-                           page_bco_global, page_id) -> CompiledComponent:
+                           page_bco_global, page_id,
+                           attr_offsets=None) -> CompiledComponent:
     """Build one component's per-slot chains for the event region.
 
     ``hc`` is the HMI component model; ``attstr_slots`` its attstr slot
     table; ``page_record_base`` the cumulative prior-page record count;
     ``page_bco_global`` the page's bco record (global); ``page_id`` the
     device page id (for the page fill geometry / hotspot nav).
+    ``attr_offsets`` is the page-wide ``{"<comp>.<attr>": global_record}``
+    map used to compile event-script slots (Timer/Slider).
     """
     lei = hc.lei
     a = hc.attrs
@@ -110,6 +159,7 @@ def build_component_chains(hc, attstr_slots, page_record_base,
     w = int(a.get("w") or 0)
     h = int(a.get("h") or 0)
     resolver = make_attr_resolver(attstr_slots, page_record_base, page_bco_global)
+    attr_offsets = attr_offsets or {}
     chains: dict[int, bytes] = {}
 
     if lei == 121:
@@ -133,6 +183,22 @@ def build_component_chains(hc, attstr_slots, page_record_base,
         # Variable: no chains.
         return CompiledComponent(lei=lei, chains={})
 
+    if lei == 51:
+        # Timer: slot 4 = the codestimer handler (with the S marker).
+        src = hc.events.get("codestimer", "").strip()
+        if src:
+            chains[4] = _compile_event(src, attr_offsets, with_s_marker=True)
+        return CompiledComponent(lei=lei, chains=chains)
+
+    if lei == 1:
+        # Slider: slot 1 = auto-fill; slots 2/3/4 = codesdown/up/slide.
+        chains[1] = _fill_chain(x, y, w, h, page_bco_global)
+        for key, slot in _EVENT_SLOTS[1].items():
+            src = hc.events.get(key, "").strip()
+            if src:
+                chains[slot] = _compile_event(src, attr_offsets)
+        return CompiledComponent(lei=lei, chains=chains)
+
     # Display / interactive components: slot 0 = init draw, slot 1 =
     # auto-fill (background restore at own geometry using page_bco).
     comp = Component(
@@ -144,7 +210,16 @@ def build_component_chains(hc, attstr_slots, page_record_base,
         chains[0] = init
     # The auto-fill exists for the display components that declare slot 1
     # in EVENT_LAYOUT (XFloat/Text/Prog/Button).
-    chains[1] = _fill_chain(x, y, w, h, page_bco_global)
+    fill = _fill_chain(x, y, w, h, page_bco_global)
+    # A Text whose txt overflows its inline buffer gets a `ref <len+1>`
+    # long-string redraw appended to its auto-fill.
+    if lei == 116:
+        txt = a.get("txt")
+        if isinstance(txt, str):
+            blen = len(txt.encode("latin-1", "replace"))
+            if blen + 1 > TEXT_INLINE_BUFFER:
+                fill += _entry(REF_OPCODE + str(blen + 1).encode("ascii"))
+    chains[1] = fill
     return CompiledComponent(lei=lei, chains=chains)
 
 
@@ -152,5 +227,6 @@ __all__ = [
     "SETBRUSH_OVERRIDE",
     "ATTR_ALIASES",
     "make_attr_resolver",
+    "build_page_attr_offsets",
     "build_component_chains",
 ]
