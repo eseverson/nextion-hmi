@@ -313,44 +313,60 @@ wired in:
   a spilled txt is written contiguously across the buffer + a `round4(len+1)`
   tail.
 
-**Residual (page 2 only, 3 bytes):** the first Text block's reserved tail
-(`Text_PARAM` bytes 25-27) is `01 4629` (= a `01` flag + the page/own bco
-`0x2946`) on page 2, but `00 0000` on every page-0 Text.  The difference
-correlates with the *next* component being a different type (Button on
-page 2; Text→Text on page 0).  Likely an editor "last-drawn-brush colour"
-cache written at a type transition; pin the exact trigger (one fixture
-with a Text immediately followed by a non-Text on a fresh page would
-confirm), then the frame image is 4/4 pages exact.
+**Page-2 Text-tail residual — RESOLVED (captured as constant).** The first
+Text block's reserved tail (`Text_PARAM` bytes 25-27) is `01 4629` on
+page 2 (`00 0000` everywhere else).  Confirmed from the IL: it is the
+editor's `GuiObjDataRecord.event_backcolor_en` (u8) + `event_backcolor`
+(u16) — `private static` draw-brush state carried across renders at
+compile time.  Non-content-derivable editor session scratch (like the `S`
+biaoji); captured per-project in
+`frame_image_generator.PROJECT_BRUSH_STATE[("settings","t0")] = (1, 0x2946)`.
+**Frame image now 4/4 pages byte-exact.**
 
-The **page-init chain** (after the frame image) is the page
-pseudo-component's own event chains, in the per-component event format:
-`[8 zero bytes / 2 terminators][compiled page codes* + per-component
-scroll/motion init blocks][len-3 `09 22 08`][`00000000` terminator]`.
-Page 1/3 (no page events) = just the `09 22 08` + terminators (constant);
-page 2 has the `codesload: h0.val=dim` handler compiled inline
-(`091d04 32 …`); page 0 has the s0 long-text scroll-init (`09 23 08`) plus
-the `4c 20 03 90 0d` L-marker (addr 0x0d90, the one `patch_l_markers`
-already handles).  This part IS generatable from the existing script
-compiler + the L-marker patcher; the frame image is the hard blocker.
+The **page-init chain — DONE** (`scripts/lib/page_init_generator.py`,
+`tests/sim/test_page_init_generator.py`).  Format (per-component event
+format): `[8 zero preamble][timerset/draw blocks][compiled page codes*]
+[len-3 doevents `09 22 08`][term]`.  Opcodes decoded from the model-100
+instruction set: `09 1d 04`=draw, `09 23 08`=timerset, `09 22 08`=doevents.
+- Pages 1/3 (no events) = `[preamble][doevents][term]` (constant);
+- page 2 = `draw 2` + the compiled `codesload: h0.val=dim` (using h0.val's
+  GLOBAL binattinf record index 0x454 = cumsum(page0,page1) + local 88);
+- page 0 = `timerset LOAD(en), <id>, LOAD(tim), 0` arming tm0 + the `L`
+  re-arm marker (placeholder addr; `patch_l_markers` fills 0x0d90).
+**All 4 pages' page-init chains byte-exact** (page-0 L addr back-patched).
+
+The **whole media blob — DONE** (`scripts/lib/media_blob_generator.py`,
+`tests/sim/test_media_blob_generator.py`): name-hash + frame image +
+page-init.  Pages 1/2/3 byte-exact; page 0 exact except the back-patched
+timer L address.
 
 ### Next concrete steps (dependency order)
 
-1. **Frame-image generator (gap 4, UNBLOCKED)** — implement
-   `frame_image_generator.py`: per-class `<Kind>_PARAM` field layout (from
-   the IL, search by struct name) + HMI-attr→field map + scratch-default
-   rule + txt inline buffer/spill + the page block.  Verified approach
-   (Slider block byte-exact).  Build type-by-type, byte-diffing each
-   object block, then each whole page.
-2. **Page-init chain** — the page pseudo-component's event chains
-   (compiled via the existing script compiler) + per-component scroll
-   init + the constant `09 22 08` block + the L-marker (patch_l_markers
-   already does the addr).  Unblocked.
-3. **Offset back-patch (item #3)** — once the media blobs generate,
-   region sizes are fixed; fill objxinxi.init_off + 5 slots +
-   attstr_bytecode_offset, page-dir hexpos/attdataaddr_rel, appinf1
-   pointers.
-4. **`nxt compile` subcommand (item #5)** — once the above make
-   `compile(HMI) == reference TFT` byte-identical; add the end-to-end test
+**All media-blob sub-regions are now DONE** (frame image, page-init chain,
+whole media blob — see above).  What remains for a byte-identical
+end-to-end `compile(HMI) == reference TFT`:
+
+1. **Event-region generation** — per-component init (slot 0) + auto-fill
+   (slot 1) + event-handler (slots 2-5) bytecode, in the per-page event
+   region (before each media blob).  Building blocks PROVEN:
+   `tft_init_encoder.encode_init_block(comp, attr_addr, opcode_override=
+   {"setbrush": 09 1c 08})` reproduces x0's init chain byte-exact when
+   `attr_addr` resolves to the GLOBAL binattinf record index (= the value
+   the attstr slot holds, offset by the page's cumulative record count);
+   `script_compiler.compile_event_handler` does the same for event chains
+   (already verified for the hotspot nav + the codesload).  The work is
+   wiring every component's chains through the global-index resolver and
+   the per-type `EVENT_LAYOUT`, then byte-diffing each page's event region.
+2. **Offset back-patch (item #3)** — DERIVABLE from the assembled layout
+   (verified): `page-dir attdataaddr_rel[i] = attdataaddr + sum(prior
+   record counts)*24`; `hexpos[i]` / objxinxi `init_off` + 5 slots +
+   `attstr_bytecode_offset` follow from the event-region + media-blob
+   sizes once the event region generates.  `media_blob_generator` already
+   computes the global record indices; extend it to emit the page-dir /
+   objxinxi offsets.
+3. **End-to-end `compile_hmi(path) -> tft_bytes`** + the acceptance test
+   `tests/sim/test_compile_hmi_end_to_end.py` (== `source/nextion.hmi.tft`
+   byte-for-byte, resources copied).  Then wire `nxt compile <in> -o <out>`
    and fix the "future nxt compile" wording in `nxt.py`.
 
 ## 1. Script compiler — open work
