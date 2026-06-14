@@ -5,15 +5,18 @@ the project ``.HMI``, GENERATING **every project-content region** from the
 HMI model — the usercode header (global dir + page name-hash + MainCode),
 the per-page event regions, the media blobs (name-hash + frame image +
 page-init), AppAllvas, binattinf, the objxinxi table (geometry + offsets +
-attstr 88-slot tables), and the page directory — and reseals the three
-CRCs.
+attstr 88-slot tables), the page directory, and the **appinf1 (H2)
+directory** (its region offsets/counts derived from the assembled sizes) —
+and reseals the H1 + 3 CRCs.
 
-The **only** span reused from the reference is its **resources prefix**
-``[0 .. strdataaddr)`` — the H1/H2/appinf framing plus the fonts/pictures
-resources blob (``0x10000``..``0x70000``), a property of the bootloader/
-driver/font composition rather than the HMI project content, and the one
-legitimately-external input (the resources blob is explicitly OUT OF SCOPE
-per me/nextion#2).  This is the reference-free milestone.
+The span reused from the reference is its **resources prefix**
+``[0 .. strdataaddr)`` — the H1 framing plus the fonts/pictures resources
+blob (``0x10000``..``0x70000``), a property of the bootloader/driver/font
+composition rather than the HMI project content (the resources blob is
+explicitly OUT OF SCOPE per me/nextion#2).  The H2 directory inside that
+prefix is REGENERATED; only the resources-coupled appinf1 fields
+(resources_size, picxinxi/zimo offsets, picture/font descriptors) are read
+from it.
 
 The whole-file output is asserted byte-identical to
 ``source/nextion.hmi.tft``.

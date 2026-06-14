@@ -18,25 +18,35 @@ Variable trailing-terminator rule) + the **attstr 88-slot tables**, and the
 page directory (object counts + back-patched hexpos/attdataaddr_rel/
 medatapos).
 
-**Signature is now `compile_hmi(hmi_path, resources_source)`** — the ONLY
-span taken from `resources_source` is the prefix `[0..strdataaddr=0x70000)`:
-- the **resources region** 0x10000..0x70000 (fonts/pictures — a property of
-  the bootloader/driver/font composition, permanently OUT OF SCOPE);
-- the H1/H2/appinf framing at the file head. H1/H2 + the 3 CRCs are
-  resealed over the generated body, so only the bytes are reused, not the
-  checksums. **appinf1 is reused as-is** — correct for same-resources
-  recompiles and same-structure edits; a *structural* edit (changing region
-  sizes/counts) must regenerate it via `compute_appinf1` (DONE + byte-
-  verified in its own test, but partly resources-coupled —
-  `picxinxi_offset_in_resources` is a property of the resources blob, not
-  project content — so it is not yet wired into `compile_hmi`).
+The **appinf1 (H2) directory is now GENERATED** via `compute_appinf1`
+(`compile_hmi._build_appinf1`): its content fields — `staticstrBeg`,
+`AppAllvasAddr/Qty`, `attdataaddr`, `pageadd`, `objxinxiadd`, `pageqyt`,
+`objqyt`, `MainCodeHex` — are *derived* from the assembled region sizes +
+HMI counts, so they follow a structural edit (added/removed components →
+changed sizes → correct offsets).  The resources-coupled fields
+(`resources_size`, `picxinxiadd`/`zimoxinxiadd` offsets, picture/font
+descriptors, the `encode` byte) are read from `resources_source` (they
+describe the bootloader/driver/font blob, not project content).
 
-So for **recompile-identity and same-resources edits, `compile` needs only
-a same-model reference for the fonts/pictures prefix** — the editor is no
-longer needed. The remaining follow-up (wire `compute_appinf1`) only
-matters for structural edits, and even then the resources prefix is still
-required. 265 tests; verified byte-identical via the `nxt compile` CLI
-(`cmp` clean, 504784 B).
+**Signature `compile_hmi(hmi_path, resources_source)`** — the span taken
+from `resources_source` is now ONLY:
+- the **resources region** 0x10000..0x70000 (fonts/pictures — permanently
+  OUT OF SCOPE) and the H1 framing at the file head;
+- the resources-coupled appinf1 fields (above).
+
+The H2 directory inside the prefix is REGENERATED; the H1 + 3 CRCs are
+resealed over the generated body.  Proven reference-free: a test zeroes the
+reference's entire usercode region (`[strdataaddr..]`) and the compiled
+output's H2 + all content still match the real reference byte-for-byte
+(`test_only_resources_prefix_is_reference_derived`), and the generated
+appinf1 == the reference field-by-field
+(`test_generated_appinf1_equals_reference`), with self-consistent offsets
+(`test_appinf1_offsets_self_consistent_with_assembly`).
+
+So `compile` needs only a same-model reference for the fonts/pictures
+resources blob + its resources-coupled descriptors — the editor is no
+longer needed for any HMI-content change.  267 tests; verified byte-
+identical via the `nxt compile` CLI (`cmp` clean, 504784 B).
 
 
 
@@ -554,7 +564,12 @@ The core encoder is done (round-trips 1679/1679 records in
   [`attribute-records.md`](attribute-records.md#whats-not-yet-figured-out),
   item 2).
 
-## 4. `appinf1` body-driven derivation — done
+## 4. `appinf1` body-driven derivation — done + WIRED into the compiler
+
+`compute_appinf1` is now wired into `compile_hmi` (`_build_appinf1`): the
+end-to-end compiler GENERATES the H2 directory from the assembled region
+sizes + the resources-coupled descriptors (see the achievement section at
+the top of this file).  The function itself:
 
 `compute_appinf1(body: BodyDescription) -> ComputedAppinf1` in
 [`scripts/lib/compute_appinf1.py`](../scripts/lib/compute_appinf1.py)

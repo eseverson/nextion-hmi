@@ -18,14 +18,16 @@ Pipeline (all sub-generators verified byte-exact in their own tests):
                                  offsets + GENERATED attstr 88-slot tables
   page directory                 page_dir_encoder (frame) + back-patched
                                  hexpos / attdataaddr_rel
-  prefix [0..strdataaddr)        copied from resources_source — H1/H2/appinf
-                                 framing + the out-of-scope resources blob
-                                 (0x10000..0x70000). appinf1 is reused here,
-                                 correct for same-resources recompiles; a
-                                 structural edit would regenerate it via
-                                 compute_appinf1 (which is partly resources-
-                                 coupled — see findings).
-  H1 / H2 / 3 CRCs               resealed
+  appinf1 (H2 directory @0xC8)   GENERATED via compute_appinf1 — content
+                                 fields (region offsets / counts) derived
+                                 from the assembled sizes; resources-coupled
+                                 fields (resources_size, picxinxi/zimo
+                                 offsets, picture/font descriptors) read from
+                                 resources_source's resources blob.
+  prefix [0..strdataaddr)        from resources_source — H1 framing + the
+                                 out-of-scope resources blob (0x10000..
+                                 0x70000), MINUS the regenerated H2 directory.
+  H1 / 3 CRCs                    resealed
 
 This module is the integration of the per-region generators; its
 acceptance test (`tests/sim/test_compile_hmi_end_to_end.py`) asserts the
@@ -308,16 +310,20 @@ def compile_hmi(hmi_path, resources_source) -> bytes:
     Every project-content region is GENERATED from the HMI: the usercode
     header (global dir + page name-hash + MainCode), the per-page event
     regions, the media blobs, AppAllvas, binattinf, the objxinxi table
-    (geometry + offsets + attstr slot tables) and the page directory.  The
-    three trailing CRCs are resealed.
+    (geometry + offsets + attstr slot tables), the page directory, and the
+    **appinf1 (H2) directory** — its region offsets/counts are derived from
+    the assembled sizes (so they follow a structural edit).  The H1 + 3 CRCs
+    are resealed.
 
-    The ONLY span taken from ``resources_source`` (a reference ``.tft`` of
-    the same model/font composition) is the **resources prefix**
-    ``[0 .. strdataaddr)`` — the H1/H2/appinf framing plus the
-    fonts/pictures resources blob (``0x10000``..``0x70000``).  That region
-    is a property of the bootloader / driver / font set, NOT of the HMI
-    project content, and is therefore the one legitimately-external input
-    (the resources blob is explicitly out of scope; see me/nextion#2).
+    The span taken from ``resources_source`` (a reference ``.tft`` of the
+    same model/font composition) is the **resources prefix**
+    ``[0 .. strdataaddr)`` — the H1 framing plus the fonts/pictures
+    resources blob (``0x10000``..``0x70000``), a property of the
+    bootloader / driver / font set, NOT of the HMI project content
+    (explicitly out of scope; see me/nextion#2).  The H2 directory inside
+    that prefix is REGENERATED; the only appinf1 fields read from
+    ``resources_source`` are the resources-coupled ones (resources_size,
+    picxinxi/zimo offsets, picture/font descriptors).
     """
     from pathlib import Path
     from scripts.lib.objxinxi_encoder import (

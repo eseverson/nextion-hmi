@@ -178,12 +178,13 @@ def _cmd_regen_schemas(args: argparse.Namespace) -> int:
 def _cmd_compile(args: argparse.Namespace) -> int:
     """Compile an HMI into a TFT (HMI→TFT compiler).
 
-    Generates every project-content region from the HMI; the ONLY span
-    reused from ``--resources`` is its prefix ``[0..strdataaddr)`` —
-    H1/H2/appinf framing + the out-of-scope fonts/pictures blob (a property
-    of the model/font set, not the project).  Verified byte-identical to
-    the project's own ``source/nextion.hmi.tft``
-    (`tests/sim/test_compile_hmi_end_to_end`).
+    Generates every project-content region from the HMI, including the
+    appinf1 (H2) directory.  From ``--resources`` it reuses the resources
+    prefix ``[0..strdataaddr)`` — H1 framing + the out-of-scope fonts/
+    pictures blob (a property of the model/font set, not the project) — plus
+    the resources-coupled appinf1 fields (resources/picxinxi/zimo offsets +
+    picture/font descriptors).  Verified byte-identical to the project's own
+    ``source/nextion.hmi.tft`` (`tests/sim/test_compile_hmi_end_to_end`).
     """
     from scripts.lib.compile_hmi import compile_hmi as _compile
     out = _compile(args.input, args.resources)
@@ -378,10 +379,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--resources",
                    default=str(REPO_ROOT / "source" / "nextion.hmi.tft"),
                    help="A reference .tft of the same model/font composition; "
-                        "ONLY its resources prefix [0..strdataaddr) "
-                        "(H1/H2/appinf framing + the out-of-scope fonts/"
-                        "pictures blob) is reused. All project content is "
-                        "generated from the HMI.")
+                        "its resources prefix [0..strdataaddr) (H1 framing + "
+                        "the out-of-scope fonts/pictures blob) and the "
+                        "resources-coupled appinf1 fields are reused. The H2 "
+                        "directory and all project content are generated from "
+                        "the HMI.")
 
     # ---- unsafe subcommands ------------------------------------------------
     p = sub.add_parser("add-hotspot-hmi",
