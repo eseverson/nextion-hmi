@@ -251,43 +251,88 @@ byte-identical. Test count 206 → 245.
 
 ### THE remaining keystone — media-blob per-object data (gap 4)
 
-The one region still copied (besides offsets that depend on it and the
-out-of-scope resources): the **per-object data blocks + trailing
-`09 22 08` page-init bytecode** inside each page's media blob, after the
-name-hash header. This is the per-page private-memory *image* — the
-editor's `StructHtoL` serialization of each component's runtime struct.
+The one content region still copied (besides offsets that depend on it
+and the out-of-scope resources): the per-page media blob's body after the
+name-hash header.  Structure decoded (2026-06-13):
 
-Reconnaissance (decoded segments by objdatarampos boundary):
+```
+media blob @ hexpos  =  [name-hash table]   ← GENERATED (build_page_name_hash_table)
+                        [frame image]       ← copied (per-object _PARAM structs)
+                        [page-init chain]   ← copied (page event chains + 09 22 08)
+```
 
-- It is NOT simply the authored attribute values. The page block is
-  `ffffffffffffffff` (8 × 0xff) even though the page has sta=1/bco=10566
-  — most fields are 0xff-default-filled and applied later by the init
-  bytecode. BUT some fields ARE pre-filled: on page 2 the Slider block
-  carries `…4629…` (0x2946 = 10566 = bco) and `…6394…` (pco=25492), and
-  the Text/Button blocks embed their txt strings ("Brightness", "Update")
-  inline. So it's a *partial* init: per type, a specific subset of fields
-  is written and the rest left 0xff.
-- Each page's blob ends with a length-prefixed `09 22 08` block (the
-  page's auto-generated init/scroll bytecode) then `00 00 00`.
+The **frame image** is `databianyi.Private_Memory.initDatas[page]` — the
+editor's `StructHtoL` serialization of each object's `<Kind>_PARAM` struct
+into per-page private RAM.  Its length is the page's `medatapos`.
 
-To generate it byte-exact, reverse — per component class — exactly which
-struct fields the editor pre-fills in the media image vs leaves 0xff, and
-the trailing page-init block's contents. Start from page 1/3 (page +
-hotspot, 31-byte trailing: 8-byte page block + a 12-byte structure +
-the 7-byte `09 22 08` block + 3 pad) — they're identical, so the page
-block default + the page-init are constant; then page 2 (Slider/Text/
-Button pre-fill) and page 0.
+**Major progress (2026-06-13): the per-field layout IS the attposup table,
+shifted by +8, filled with authored values.**  Verified field-for-field on
+Slider, Text, Button, AND XFloat: every RAM-backed attribute lands at
+`frame_offset = attposup + 8` carrying its *authored* HMI value (0xff where
+unset).  Examples (all exact):
+- Slider h0: bco@(6+8=14)=0x2946, pco@16=0x6394, val@18=100, maxval@20=100,
+  minval@22=5, ch@24=25; wid/hig@11/12=0xff (authored 255).
+- Text t0: pco@10=0xffde, bco@12=0x2946, xcen/ycen@14/15=1, pw@16=0,
+  txt buffer@17="Brightness\0".
+- Button b0: bco@10, bco2@12, pco@14, pco2@16, txt@21="Update".
+- XFloat: sta@8, font@13, bco@14, pco@16, xcen/ycen@18/19, val@20.
+
+So a per-object block = `[8-byte head] [attposup-ordered fields with
+authored values, 0xff default]`.  The 8-byte head's contents are still
+undecoded (Text head `0000 d1f7 0000 0000`; Slider head `ffffffff
+0100 4629`).
+
+**Block layout SOLVED (2026-06-13):** the file frame image is laid out as
+`[page block: 32 bytes] [per-object blocks: SIZEOF_OBJDATA_T1 each,
+4-aligned, with the same long-string spill as the runtime allocator]`.
+This is NOT the runtime `objdatarampos` layout (page block there is 8, here
+32; the file frame omits the `16+4*ceil(n/4)` runtime prefix).  Verified:
+all 10 page-0 Text blocks land at the computed bases (t0@256 … s0@508) with
+`txt` at `base + attposup(9) + 8`, and every numeric field at
+`base + attposup + 8` carries its authored value.  Computed total 592 vs
+medatapos 600 — an 8-byte gap that lives in the page block (likely 40, not
+32) or a trailing struct; pin it.
+
+**The ONE remaining blocker — the per-block 8-byte head.** Each object's
+block = `[8-byte head][attposup+8 field body]`.  The field body is fully
+derivable (authored values / 0xff).  The 8-byte head is NOT a clean
+constant and is the unresolved piece: e.g. page-0 XFloat heads are
+`ffffffff01004629` (x0), `0000000001000000` (x1), `0001000001000000` (x4),
+`000032194629cdfd` (x6) — they carry real values (`4629`=bco, `cdfd`=…) in
+a pattern that needs the `<Kind>_PARAM` *Head* struct definition to
+decode.  Without the IL struct defs (`/tmp/hmitype_all.il`, not present in
+this environment) the head content can't be reproduced byte-exact; the
+field body + block layout are done.
+
+Practical upshot: the frame image is ~90% reversed (layout + field body +
+authored fill); the residual 8-byte-head-per-block (and the page block's
+exact 32-vs-40 size) is blocked on the hmitype.dll IL struct dump.  Re-
+extract `attrs-raw.txt`-style struct layouts (`<Kind>_PARAM_Head` field
+order/widths) from the IL to finish.
+
+The **page-init chain** (after the frame image) is the page
+pseudo-component's own event chains, in the per-component event format:
+`[8 zero bytes / 2 terminators][compiled page codes* + per-component
+scroll/motion init blocks][len-3 `09 22 08`][`00000000` terminator]`.
+Page 1/3 (no page events) = just the `09 22 08` + terminators (constant);
+page 2 has the `codesload: h0.val=dim` handler compiled inline
+(`091d04 32 …`); page 0 has the s0 long-text scroll-init (`09 23 08`) plus
+the `4c 20 03 90 0d` L-marker (addr 0x0d90, the one `patch_l_markers`
+already handles).  This part IS generatable from the existing script
+compiler + the L-marker patcher; the frame image is the hard blocker.
 
 ### Next concrete steps (dependency order)
 
-1. **Media-blob per-object data + page-init bytecode (gap 4 above)** —
-   reverse the per-class struct pre-fill; page 1/3 first (constant), then
-   2 and 0. This is the last in-scope content region.
-2. **Offset back-patch (item #3)** — once the media blobs are generated
-   (so all region sizes are fixed), fill objxinxi.init_off + 5 slots +
-   attstr_bytecode_offset, page-dir hexpos/attdataaddr_rel, and appinf1
-   region pointers from the assembled layout.
-3. **`nxt compile` subcommand (item #5)** — wire it once the above make
+1. **Frame-image `<Kind>_PARAM` layouts (gap 4, BLOCKED)** — needs the
+   `hmitype.dll` IL struct dump (re-extract `/tmp/hmitype_all.il`) to get
+   each class's field order + the pre-fill rule. Without it this region
+   stays copied. The page-init chain part is unblocked (script compiler +
+   L-marker patcher) and can be generated independently.
+2. **Offset back-patch (item #3)** — gated on gap 4: `hexpos` points into
+   the media blob, so region sizes (hence objxinxi.init_off + 5 slots +
+   attstr_bytecode_offset, page-dir hexpos/attdataaddr_rel, appinf1
+   pointers) aren't fixed until the media blobs are generated.
+3. **`nxt compile` subcommand (item #5)** — once the above make
    `compile(HMI) == reference TFT` byte-identical.
 
 ## 1. Script compiler — open work
