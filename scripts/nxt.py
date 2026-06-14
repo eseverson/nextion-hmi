@@ -178,14 +178,15 @@ def _cmd_regen_schemas(args: argparse.Namespace) -> int:
 def _cmd_compile(args: argparse.Namespace) -> int:
     """Compile an HMI into a TFT (HMI→TFT compiler).
 
-    Generates every region from the HMI; the usercode header, the
-    per-component attstr slot tables, and the out-of-scope resources blob
-    are taken from ``--reference`` (header/attstr generation are follow-ups
-    — see findings/next-steps.md).  Verified byte-identical to the project's
-    own ``source/nextion.hmi.tft`` (`tests/sim/test_compile_hmi_end_to_end`).
+    Generates every project-content region from the HMI; the ONLY span
+    reused from ``--resources`` is its prefix ``[0..strdataaddr)`` —
+    H1/H2/appinf framing + the out-of-scope fonts/pictures blob (a property
+    of the model/font set, not the project).  Verified byte-identical to
+    the project's own ``source/nextion.hmi.tft``
+    (`tests/sim/test_compile_hmi_end_to_end`).
     """
     from scripts.lib.compile_hmi import compile_hmi as _compile
-    out = _compile(args.input, args.reference)
+    out = _compile(args.input, args.resources)
     with open(args.output, "wb") as fh:
         fh.write(out)
     print(f"compiled {args.input} -> {args.output} ({len(out)} bytes)")
@@ -374,10 +375,13 @@ def build_parser() -> argparse.ArgumentParser:
                             "byte-identical to the project reference).")
     p.add_argument("input", help="Input .HMI file.")
     p.add_argument("-o", "--output", required=True, help="Output .tft file.")
-    p.add_argument("--reference",
+    p.add_argument("--resources",
                    default=str(REPO_ROOT / "source" / "nextion.hmi.tft"),
-                   help="Reference TFT supplying the not-yet-generated spans "
-                        "(usercode header, attstr slot tables, resources blob).")
+                   help="A reference .tft of the same model/font composition; "
+                        "ONLY its resources prefix [0..strdataaddr) "
+                        "(H1/H2/appinf framing + the out-of-scope fonts/"
+                        "pictures blob) is reused. All project content is "
+                        "generated from the HMI.")
 
     # ---- unsafe subcommands ------------------------------------------------
     p = sub.add_parser("add-hotspot-hmi",

@@ -948,6 +948,29 @@ def build_component_block(
     return block, bytes(pianyi)
 
 
+def build_attstr_slots(lei: int, page_record_base: int) -> list[int]:
+    """Return the 88-entry objxinxi attstr slot table for a component.
+
+    Each AppAttNames slot holds the component's page-local binattinf record
+    index for that attribute (``page_record_base`` + the attribute's offset
+    within the component's stride-sized record block, from
+    ``PER_LEI_LAYOUT``); absent attributes are ``0xffff``.
+    ``page_record_base`` is the cumulative record-stride sum of the
+    components before this one on the page.
+    """
+    try:
+        from .tft_attrs_layout import PER_LEI_LAYOUT
+    except ImportError:
+        from tft_attrs_layout import PER_LEI_LAYOUT
+    _stride, offset_map = PER_LEI_LAYOUT[lei]
+    slots = [0xFFFF] * ATTSTRPIANYI_SLOTS
+    for name, off in offset_map.items():
+        s = _APP_ATT_NAMES_INDEX.get(name)
+        if s is not None and s < ATTSTRPIANYI_SLOTS:
+            slots[s] = page_record_base + off
+    return slots
+
+
 # ---------------------------------------------------------------------------
 # Self-test against fixture
 # ---------------------------------------------------------------------------

@@ -91,22 +91,25 @@ class ObjxinxiLayout:
         self.attstr_bytecode_offset = 0
 
 
-def assemble_usercode_and_layout(hmi, data, a1):
+def assemble_usercode_and_layout(hmi, data, a1, program_s):
     """Assemble the usercode region (strdataaddr..pageadd) from generated
     sub-regions and return ``(usercode_bytes, per_page_objxinxi_layout,
     page_dir_offsets)``.
 
-    The header is sliced from the reference (header generation is a
-    follow-up).  Offsets needed by the objxinxi / page-dir encoders are
-    tracked as the event regions are emitted.
+    The header (global dir + page name-hash + MainCode) is GENERATED from
+    the HMI + ``Program.s``.  Offsets needed by the objxinxi / page-dir
+    encoders are tracked as the event regions are emitted.
     """
-    strd = a1["strdataaddr"]
-    header_end = 0x9E
-    header = data[strd:strd + header_end]
+    from scripts.lib.header_generator import build_header
 
-    objs = _ref_objxinxi(data, a1)
+    strd = a1["strdataaddr"]
+    header = build_header(hmi, program_s)
+
     counts = page_record_counts(hmi)
     cum = [sum(counts[:i]) for i in range(len(counts) + 1)]
+    # Generated per-component attstr slot tables (page-local record indices)
+    # — replaces the reference objxinxi slots.
+    attstr = _generated_attstr_slots(hmi)
 
     out = bytearray(header)
     page_layouts: list[list[ObjxinxiLayout]] = []
@@ -116,7 +119,7 @@ def assemble_usercode_and_layout(hmi, data, a1):
     attdata0 = a1["attdataaddr"]
 
     for pi, hp in enumerate(hmi):
-        po = objs[pi]
+        po = attstr[pi]   # objects exposing generated .slots
         base = cum[pi]
         page_bco = base + po[0].slots[APP_ATT_NAMES.index("bco")]
         attr_offs = build_page_attr_offsets(hp.components, po, base)
@@ -157,8 +160,7 @@ def assemble_usercode_and_layout(hmi, data, a1):
         page_dir.append((hexpos, attdata_rel))
 
     # AppAllvas + binattinf tail.
-    state_program = _load_program_s(hmi)
-    out += build_appallvas(state_program)
+    out += build_appallvas(program_s)
     for pi, hp in enumerate(hmi):
         layout = layout_from_hmi_page(hp)
         for ci, hc in enumerate(hp.components):
@@ -175,25 +177,38 @@ def assemble_usercode_and_layout(hmi, data, a1):
 
     # Patch the timer L re-arm markers now the layout is fixed.
     out = bytearray(patch_l_markers(bytes(out), region_base=0))
-    return bytes(out), page_layouts, page_dir
+    return bytes(out), page_layouts, page_dir, attstr
 
 
-# --- reference-derived helpers (objxinxi attstr slots, program.s) ----------
+# --- generated attstr slots -----------------------------------------------
 
-def _ref_objxinxi(data, a1):
-    from scripts.lib.tft_attrs import (
-        parse_page_directory, parse_objxinxi,
-    )
-    pd = parse_page_directory(data, a1["pageadd"], a1["pageqyt"])
-    objs = parse_objxinxi(data, a1["objxinxiadd"], a1["objqyt"])
-    return [objs[p["objstar"]:p["objstar"] + p["objqyt"]] for p in pd]
+class _AttstrObj:
+    """Minimal stand-in exposing ``.slots`` (the 88-entry attstr table)
+    so the per-region generators don't need to change shape."""
+
+    __slots__ = ("slots",)
+
+    def __init__(self, slots):
+        self.slots = slots
 
 
-def _load_program_s(hmi):
-    # hmi pages don't carry Program.s; reload it from the loader.
-    from sim.loader import load_hmi
-    from pathlib import Path
-    return ""
+def _generated_attstr_slots(hmi):
+    """Per-page list of :class:`_AttstrObj` with GENERATED attstr slot
+    tables (page-local binattinf record indices), replacing the reference
+    objxinxi.  ``page_record_base`` is the cumulative stride sum of the
+    components before each one on its page."""
+    from scripts.lib.tft_attrs_encoder import build_attstr_slots
+    from scripts.lib.tft_attrs_layout import PER_LEI_LAYOUT
+
+    out = []
+    for hp in hmi:
+        base = 0
+        page = []
+        for hc in hp.components:
+            page.append(_AttstrObj(build_attstr_slots(hc.lei, base)))
+            base += PER_LEI_LAYOUT[hc.lei][0]
+        out.append(page)
+    return out
 
 
 def _build_media_blob_for_page(hp, pi, counts, po, base):
@@ -213,25 +228,30 @@ def _build_media_blob_for_page(hp, pi, counts, po, base):
     return name_hash + frame + page_init
 
 
-def compile_hmi(hmi_path, reference_tft) -> bytes:
+def compile_hmi(hmi_path, resources_source) -> bytes:
     """Compile ``hmi_path`` into a complete ``.tft``, returning the bytes.
 
-    ``reference_tft`` supplies the H1/H2 framing, the usercode header
-    (global dir + page name-hash + MainCode), the per-component attstr
-    slot tables, and the out-of-scope resources blob — the spans not yet
-    generated from the HMI (header generation + attstr-table generation
-    are follow-ups; see findings).  Everything else (event regions, media
-    blobs, AppAllvas, binattinf, objxinxi geometry/offsets, page directory)
-    is GENERATED.
+    Every project-content region is GENERATED from the HMI: the usercode
+    header (global dir + page name-hash + MainCode), the per-page event
+    regions, the media blobs, AppAllvas, binattinf, the objxinxi table
+    (geometry + offsets + attstr slot tables) and the page directory.  The
+    three trailing CRCs are resealed.
+
+    The ONLY span taken from ``resources_source`` (a reference ``.tft`` of
+    the same model/font composition) is the **resources prefix**
+    ``[0 .. strdataaddr)`` — the H1/H2/appinf framing plus the
+    fonts/pictures resources blob (``0x10000``..``0x70000``).  That region
+    is a property of the bootloader / driver / font set, NOT of the HMI
+    project content, and is therefore the one legitimately-external input
+    (the resources blob is explicitly out of scope; see me/nextion#2).
     """
     from pathlib import Path
     from scripts.lib.tft_attrs import (
-        parse_appinf1_corrected, parse_objxinxi, parse_page_directory,
-        ATTSTRPIANYI_OFFSET, ATTSTRPIANYI_SLOT_COUNT,
+        parse_appinf1_corrected, parse_page_directory,
     )
     from scripts.lib.h2_cipher import encrypt as h2_decrypt
     from scripts.lib.objxinxi_encoder import (
-        encode_objxinxi_entry, ObjxinxiInputs, OBJXINXI_ENTRY_SIZE,
+        encode_objxinxi_entry, ObjxinxiInputs,
     )
     from scripts.lib.page_dir_encoder import encode_page_dir_entry, PageDirInputs
     from scripts.lib.media_allocator import layout_from_hmi_page
@@ -239,32 +259,20 @@ def compile_hmi(hmi_path, reference_tft) -> bytes:
     from scripts.lib.page_crc import crc32_bytewise
     from sim.loader import load_hmi as _load_hmi_state
 
-    data = Path(reference_tft).read_bytes()
+    data = Path(resources_source).read_bytes()
     model_crc = int.from_bytes(data[0x2E:0x32], "little")
     a1 = parse_appinf1_corrected(h2_decrypt(data[0xC8:0xC8 + 196], model_crc))
 
-    prog = _load_hmi_state(str(hmi_path)).program_s
-    global _load_program_s
-    _saved = _load_program_s
-    _load_program_s = lambda hmi: prog  # noqa: E731
-    try:
-        hmi = load_hmi_pages(hmi_path)
-        usercode, layouts, page_dir = assemble_usercode_and_layout(hmi, data, a1)
-    finally:
-        _load_program_s = _saved
+    program_s = _load_hmi_state(str(hmi_path)).program_s
+    hmi = load_hmi_pages(hmi_path)
+    usercode, layouts, page_dir, attstr_tables = assemble_usercode_and_layout(
+        hmi, data, a1, program_s)
 
-    ref_objs = parse_objxinxi(data, a1["objxinxiadd"], a1["objqyt"])
-
-    # objxinxi table (geometry + generated offsets; attstr slots from ref).
+    # objxinxi table (geometry + GENERATED offsets + GENERATED attstr slots).
     obj_bytes = bytearray()
-    oi = 0
     for pi, hp in enumerate(hmi):
         media = layout_from_hmi_page(hp)
         for ci, (hc, cl) in enumerate(zip(hp.components, layouts[pi])):
-            ref = ref_objs[oi]
-            attstr = list(struct.unpack_from(
-                f"<{ATTSTRPIANYI_SLOT_COUNT}H", ref.raw,
-                ATTSTRPIANYI_OFFSET + 4))
             pa = hc.attrs
             x = 0 if ci == 0 else int(pa.get("x") or 0)
             y = 0 if ci == 0 else int(pa.get("y") or 0)
@@ -276,8 +284,7 @@ def compile_hmi(hmi_path, reference_tft) -> bytes:
                     init_off=cl.init_off, slot_offsets=cl.slot_offsets,
                     objdatarampos=media.objdatarampos[ci],
                     attstr_bytecode_offset=cl.attstr_bytecode_offset,
-                    attstr_slots=attstr))
-            oi += 1
+                    attstr_slots=attstr_tables[pi][ci].slots))
 
     # page directory (object counts + generated hexpos/attdataaddr_rel;
     # medatapos generated).
@@ -293,8 +300,9 @@ def compile_hmi(hmi_path, reference_tft) -> bytes:
                           medatapos=medatapos))
         objstar += len(hp.components)
 
-    # Assemble the whole file over a copy of the reference (resources +
-    # H1/H2 framing kept), splicing in every generated region.
+    # Assemble the whole file over the resources source: the prefix
+    # [0..strdataaddr) — H1/H2/appinf framing + the out-of-scope resources
+    # blob — is kept; every project-content region after it is GENERATED.
     out = bytearray(data)
     strd = a1["strdataaddr"]
     out[strd:a1["pageadd"]] = usercode
