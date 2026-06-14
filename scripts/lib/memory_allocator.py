@@ -125,6 +125,7 @@ SIZEOF_OBJDATA_T1: Dict[int, int] = {
     51:   4,   # Timer                   — Timer_PARAM
     52:   4,   # Vari (Variable)         — Vari_PARAM_tk (just `val` u32)
     53:  24,   # Button_T (touch Button) — Button_T_PARAM_tk (13 fields + 11-byte txt buf → ceil4=24; byte-verified via 17.tft page-3 stride)
+    54:  24,   # Number                  — Number_PARAM (XFloat-like 24B); byte-verified via untested.tft error page
     55:  36,   # GText (ScrollingText in attribute-records.md) — GText_PARAM
     56:  12,   # CheckBox                — CheckBox_PARAM
     57:   8,   # Radio                   — Radio_PARAM

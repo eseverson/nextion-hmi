@@ -113,7 +113,8 @@ class LiteralAttr:
 # literal records, txt inline/spill buffer, the Variable 0xff sentinels +
 # sta record are all wired).  build_component_binattinf still raises for a
 # lei outside this set unless allow_unverified=True.
-VERIFIED_LEIS = frozenset({121, 109, 1, 116, 98, 59, 106, 51, 52})
+VERIFIED_LEIS = frozenset({121, 109, 1, 116, 98, 59, 106, 51, 52, 54,
+                           112, 113, 56, 57, 122, 58, 0, 53, 55})
 
 
 DATAFROM_ATTRS: dict[int, list[DatafromAttr]] = {
@@ -133,6 +134,21 @@ DATAFROM_ATTRS: dict[int, list[DatafromAttr]] = {
         DatafromAttr("val", 12, "SS32", -2147483648, 2147483647, False),
         DatafromAttr("vvs0", 16, "UU8", 0, 10, False),
         DatafromAttr("vvs1", 17, "UU8", 0, 8, False),
+        DatafromAttr("isbr", 20, "Select", 0, 1, False),
+        DatafromAttr("spax", 21, "UU8", 0, 255, False),
+        DatafromAttr("spay", 22, "UU8", 0, 255, False),
+    ],
+    54: [  # Number (numeric display; XFloat-like with lenth/format)
+        DatafromAttr("sta", 0, "Select", 0, 2, True),
+        DatafromAttr("style", 1, "Select", 0, 3, True),
+        DatafromAttr("font", 5, "Fontid", 0, 1, False),
+        DatafromAttr("bco", 6, "Color", 0, 65535, False),
+        DatafromAttr("pco", 8, "Color", 0, 65535, False),
+        DatafromAttr("xcen", 10, "Select", 0, 2, False),
+        DatafromAttr("ycen", 11, "Select", 0, 2, False),
+        DatafromAttr("val", 12, "SS32", -2147483648, 2147483647, False),
+        DatafromAttr("lenth", 16, "Select", 0, 15, False),
+        DatafromAttr("format", 17, "Select", 0, 2, False),
         DatafromAttr("isbr", 20, "Select", 0, 1, False),
         DatafromAttr("spax", 21, "UU8", 0, 255, False),
         DatafromAttr("spay", 22, "UU8", 0, 255, False),
@@ -188,13 +204,91 @@ DATAFROM_ATTRS: dict[int, list[DatafromAttr]] = {
     52: [  # Variable
         DatafromAttr("val", 0, "SS32", -2147483648, 2147483647, False),
     ],
+    # --- untested.tft error-page types (me/miata-dash#38) ----------------
+    112: [  # Picture — single Picid
+        DatafromAttr("pic", 0, "Picid", 0, -1, False),
+    ],
+    113: [  # Picc (CropPicture) — Picid + two SS16 vvs literals
+        DatafromAttr("picc", 0, "Picid", 0, -1, False),
+    ],
+    56: [  # CheckBox
+        DatafromAttr("style", 0, "Select", 0, 3, True),
+        DatafromAttr("bco", 4, "Color", 0, 65535, False),
+        DatafromAttr("pco", 6, "Color", 0, 65535, False),
+        DatafromAttr("val", 8, "Select", 0, 1, False),
+    ],
+    57: [  # Radio
+        DatafromAttr("bco", 0, "Color", 0, 65535, False),
+        DatafromAttr("pco", 2, "Color", 0, 65535, False),
+        DatafromAttr("val", 4, "Select", 0, 1, False),
+    ],
+    122: [  # Gauge / Zhizhen
+        DatafromAttr("sta", 0, "Select", 0, 2, True),
+        DatafromAttr("bco", 2, "Color", 0, 65535, False),
+        DatafromAttr("val", 4, "UU16", 0, 360, False),
+        DatafromAttr("pco", 14, "Color", 0, 65535, False),
+        DatafromAttr("wid", 20, "UU8", 1, 20, False),
+    ],
+    58: [  # QRcode
+        DatafromAttr("sta", 0, "Select", 0, 1, True),
+        DatafromAttr("dis", 1, "UU8", 0, 255, False),
+        DatafromAttr("bco", 2, "Color", 0, 65535, False),
+        DatafromAttr("pco", 4, "Color", 0, 65535, False),
+        DatafromAttr("txt", 100, "Sstr", 0, 0, False, merrylenth_override=31),
+        DatafromAttr("txt_maxl", 8, "UU16", 0, 192, True),
+    ],
+    0: [  # Waveform / Curve
+        DatafromAttr("sta", 0, "Select", 0, 2, True),
+        DatafromAttr("dir", 1, "Select", 0, 2, True),
+        DatafromAttr("ch", 2, "Select", 1, 4, True),
+        DatafromAttr("bco", 4, "Color", 0, 65535, False),
+        DatafromAttr("gdc", 6, "Color", 0, 65535, False),
+        DatafromAttr("gdw", 8, "UU8", 0, 255, False),
+        DatafromAttr("gdh", 9, "UU8", 0, 255, False),
+        DatafromAttr("pco0", 14, "Color", 0, 65535, False),
+        DatafromAttr("dis", 24, "UU16", 10, 1000, False),
+    ],
+    53: [  # Button_T (DualStateButton)
+        DatafromAttr("font", 0, "Fontid", 0, 1, False),
+        DatafromAttr("val", 1, "Select", 0, 1, False),
+        DatafromAttr("bco", 2, "Color", 0, 65535, False),
+        DatafromAttr("bco2", 4, "Color", 0, 65535, False),
+        DatafromAttr("pco", 6, "Color", 0, 65535, False),
+        DatafromAttr("pco2", 8, "Color", 0, 65535, False),
+        DatafromAttr("xcen", 10, "Select", 0, 2, False),
+        DatafromAttr("ycen", 11, "Select", 0, 2, False),
+        DatafromAttr("isbr", 12, "Select", 0, 1, False),
+        DatafromAttr("txt", 13, "Sstr", 0, 0, False, merrylenth_override=11),
+    ],
+    55: [  # GText / ScrollingText
+        DatafromAttr("sta", 0, "Select", 0, 2, True),
+        DatafromAttr("style", 1, "Select", 0, 3, True),
+        DatafromAttr("font", 5, "Fontid", 0, 1, False),
+        DatafromAttr("bco", 6, "Color", 0, 65535, False),
+        DatafromAttr("pco", 8, "Color", 0, 65535, False),
+        DatafromAttr("xcen", 10, "Select", 0, 2, False),
+        DatafromAttr("ycen", 11, "Select", 0, 2, False),
+        DatafromAttr("dir", 12, "Select", 0, 3, False),
+        DatafromAttr("dis", 13, "Select", 2, 50, False),
+        DatafromAttr("tim", 14, "UU16", 80, 65534, False),
+        DatafromAttr("en", 16, "Select", 0, 1, False),
+        DatafromAttr("txt", 72, "Sstr", 0, 0, False, merrylenth_override=11),
+        DatafromAttr("txt_maxl", 18, "UU16", 0, 65534, True),
+        DatafromAttr("isbr", 24, "Select", 0, 1, False),
+        DatafromAttr("spax", 25, "UU8", 0, 255, False),
+        DatafromAttr("spay", 26, "UU8", 0, 255, False),
+        DatafromAttr("vvs0", 28, "SS16", -2147483648, 2147483647, False),
+        DatafromAttr("vvs1", 30, "SS16", -2147483648, 2147483647, False),
+        DatafromAttr("vvs2", 32, "SS16", -2147483648, 2147483647, False),
+        DatafromAttr("vvs3", 34, "SS16", -2147483648, 2147483647, False),
+    ],
 }
 
 
 # Inline `txt` buffer capacity per type (bytes); the `txt_maxl` literal
 # record stores capacity-1, and the `txt` datafrom record's merrylenth is
 # this value when the string fits inline.
-INLINE_TXT_BUFFER: dict[int, int] = {116: 16, 98: 11, 53: 11}
+INLINE_TXT_BUFFER: dict[int, int] = {116: 16, 98: 11, 53: 11, 58: 31, 55: 11}
 
 
 # Per-class non-datafrom literal records (value stored verbatim,
@@ -215,6 +309,17 @@ LITERAL_ATTRS: dict[int, list[LiteralAttr]] = {
     ],
     52: [  # Variable
         LiteralAttr("sta", "Select", 0, 1, default=0),
+    ],
+    # --- untested.tft error-page types (me/miata-dash#38) ----------------
+    113: [  # Picc — two SS16 crop-window literals (default 0)
+        LiteralAttr("vvs0", "SS16", -2147483648, 2147483647, default=0),
+        LiteralAttr("vvs1", "SS16", -2147483648, 2147483647, default=0),
+    ],
+    53: [  # Button_T — sta/style/spax/spay literals (txt_maxl auto-appended)
+        LiteralAttr("sta", "Select", 0, 2, default=0),
+        LiteralAttr("style", "Select", 0, 4, default=0),
+        LiteralAttr("spax", "UU8", 0, 255, default=0),
+        LiteralAttr("spay", "UU8", 0, 255, default=0),
     ],
 }
 
@@ -397,8 +502,11 @@ def build_component_binattinf(
             change=True, datafrom=False,
         )
 
-    # txt_maxl Strlenth literal record (txt capacity - 1).
-    if txt_merrylenth is not None:
+    # txt_maxl Strlenth literal record (txt capacity - 1) — only when the
+    # type doesn't already declare txt_maxl as a datafrom record (QRcode /
+    # GText carry a RAM-backed UU16 txt_maxl instead; see DATAFROM_ATTRS).
+    if (txt_merrylenth is not None
+            and not any(da.name == "txt_maxl" for da in DATAFROM_ATTRS[lei])):
         records["txt_maxl"] = mk(
             "txt_maxl", txt_merrylenth - 1, 65534, 0, "Strlenth",
             change=True, datafrom=False,

@@ -108,6 +108,13 @@ PER_LEI_LAYOUT: dict[int, tuple[int, dict[str, int]]] = {
         'pco': 24, 'pco2': 25, 'xcen': 26, 'ycen': 27, 'val': 28,
         'txt': 29, 'txt_maxl': 30, 'isbr': 31, 'spax': 32, 'spay': 33,
     }),
+    54: (41, {  # GuiObjNumber (== XFloat layout w/ lenth/format for vvs0/vvs1)
+        'type': 0, 'id': 1, 'vscope': 3,
+        'x': 9, 'y': 10, 'w': 11, 'h': 12, 'endx': 13, 'endy': 14,
+        'sta': 19, 'style': 20, 'font': 22, 'bco': 23, 'pco': 24,
+        'xcen': 25, 'ycen': 26, 'val': 27, 'lenth': 28, 'format': 29,
+        'isbr': 30, 'spax': 31, 'spay': 32,
+    }),
     55: (48, {  # GuiObjGText
         'type': 0, 'id': 1, 'vscope': 3,
         'x': 9, 'y': 10, 'w': 11, 'h': 12, 'endx': 13, 'endy': 14,
