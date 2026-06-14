@@ -33,7 +33,9 @@ from scripts.lib.h2_cipher import encrypt as h2_decrypt  # noqa: E402
 from scripts.lib.hmi_model import load_hmi_pages  # noqa: E402
 from scripts.lib.tft_attrs_encoder import APP_ATT_NAMES  # noqa: E402
 from scripts.lib.usercode_assembler import assemble_event_region  # noqa: E402
-from scripts.lib.event_region_generator import build_component_chains  # noqa: E402
+from scripts.lib.event_region_generator import (  # noqa: E402
+    build_component_chains, build_page_attr_offsets, page_overlap_refs,
+)
 from scripts.lib.media_blob_generator import page_record_counts  # noqa: E402
 
 H2_START, H2_END = 0xC8, 0xC8 + 196
@@ -59,16 +61,23 @@ def _build_page_event_region(data, a1, pd, objs, hmi, pi, cum):
     po = objs[pd[pi]["objstar"]:pd[pi]["objstar"] + pd[pi]["objqyt"]]
     base = cum[pi]
     page_bco = base + po[0].slots[APP_ATT_NAMES.index("bco")]
+    attr_offs = build_page_attr_offsets(hmi[pi].components, po, base)
+    orefs = page_overlap_refs(hmi[pi].components)
     comps = [
-        build_component_chains(hc, list(o.slots), base, page_bco, hmi[pi].page_id)
+        build_component_chains(hc, list(o.slots), base, page_bco,
+                               hmi[pi].page_id, attr_offs, orefs.get(hc.name))
         for hc, o in zip(hmi[pi].components, po)
     ]
     return assemble_event_region(comps)
 
 
-@pytest.mark.parametrize("page_idx", [1, 3])
+@pytest.mark.parametrize("page_idx", [0, 1, 2, 3])
 def test_event_region_byte_exact_pages_1_3(page_idx):
-    """Pages 1 & 3 whole event regions generate byte-for-byte."""
+    """All 4 pages' whole event regions generate byte-for-byte.
+
+    Page 0 exercises the Timer codestimer cascade (with S marker) + the
+    s0<->m0 overlap cross-refresh; page 2 the Slider events + the Button
+    press/release auto-logic + the user codesdown."""
     data, a1 = _load()
     strd = a1["strdataaddr"]
     pd = parse_page_directory(data, a1["pageadd"], a1["pageqyt"])

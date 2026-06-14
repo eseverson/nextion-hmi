@@ -238,11 +238,34 @@ def build_component_chains(hc, attstr_slots, page_record_base,
 
     if lei == 1:
         # Slider: slot 1 = auto-fill; slots 2/3/4 = codesdown/up/slide.
-        chains[1] = _fill_chain(x, y, w, h, page_bco_global)
+        chains[1] = _fill_with_refs(x, y, w, h, page_bco_global, overlap_ids)
         for key, slot in _EVENT_SLOTS[1].items():
             src = hc.events.get(key, "").strip()
             if src:
                 chains[slot] = _compile_event(src, attr_offsets)
+        return CompiledComponent(lei=lei, chains=chains)
+
+    if lei == 98:
+        # Button: slot 0 = init (cjmp press/release), slot 1 = auto-fill,
+        # slot 2 = press (val=1 + self-ref + user codesdown), slot 3 =
+        # release (val=0 + self-ref).
+        comp = Component(comp_type=lei, comp_id=int(a.get("id") or 0),
+                         page_id=page_id, x=x, y=y, w=w, h=h, attrs=a)
+        init = encode_init_block(comp, resolver, opcode_override=SETBRUSH_OVERRIDE)
+        if init:
+            chains[0] = init
+        chains[1] = _fill_with_refs(x, y, w, h, page_bco_global, overlap_ids)
+        bid = int(a.get("id") or 0)
+        val_ref = f"{hc.name}.val"
+        # Self-refresh block: `ref <id>+long(65535)` (the button's redraw).
+        self_ref = _entry(REF_OPCODE + str(bid).encode("ascii")
+                          + b"+" + b"\x03" + struct.pack("<I", 0xFFFF))
+        down = _compile_event(f"{val_ref}=1", attr_offsets) + self_ref
+        user = hc.events.get("codesdown", "").strip()
+        if user:
+            down += _compile_event(user, attr_offsets)
+        chains[2] = down
+        chains[3] = _compile_event(f"{val_ref}=0", attr_offsets) + self_ref
         return CompiledComponent(lei=lei, chains=chains)
 
     # Display / interactive components: slot 0 = init draw, slot 1 =
