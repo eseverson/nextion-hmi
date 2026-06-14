@@ -340,34 +340,55 @@ The **whole media blob — DONE** (`scripts/lib/media_blob_generator.py`,
 page-init.  Pages 1/2/3 byte-exact; page 0 exact except the back-patched
 timer L address.
 
-### Next concrete steps (dependency order)
+### Event region — DONE (all 4 pages byte-exact, 2026-06-13)
 
-**All media-blob sub-regions are now DONE** (frame image, page-init chain,
-whole media blob — see above).  What remains for a byte-identical
-end-to-end `compile(HMI) == reference TFT`:
+`scripts/lib/event_region_generator.py`
+(`tests/sim/test_event_region_generator.py`) GENERATES the whole per-page
+usercode event region from the HMI — **all 4 pages byte-exact**:
 
-1. **Event-region generation** — per-component init (slot 0) + auto-fill
-   (slot 1) + event-handler (slots 2-5) bytecode, in the per-page event
-   region (before each media blob).  Building blocks PROVEN:
-   `tft_init_encoder.encode_init_block(comp, attr_addr, opcode_override=
-   {"setbrush": 09 1c 08})` reproduces x0's init chain byte-exact when
-   `attr_addr` resolves to the GLOBAL binattinf record index (= the value
-   the attstr slot holds, offset by the page's cumulative record count);
-   `script_compiler.compile_event_handler` does the same for event chains
-   (already verified for the hotspot nav + the codesload).  The work is
-   wiring every component's chains through the global-index resolver and
-   the per-type `EVENT_LAYOUT`, then byte-diffing each page's event region.
-2. **Offset back-patch (item #3)** — DERIVABLE from the assembled layout
-   (verified): `page-dir attdataaddr_rel[i] = attdataaddr + sum(prior
-   record counts)*24`; `hexpos[i]` / objxinxi `init_off` + 5 slots +
-   `attstr_bytecode_offset` follow from the event-region + media-blob
-   sizes once the event region generates.  `media_blob_generator` already
-   computes the global record indices; extend it to emit the page-dir /
-   objxinxi offsets.
-3. **End-to-end `compile_hmi(path) -> tft_bytes`** + the acceptance test
-   `tests/sim/test_compile_hmi_end_to_end.py` (== `source/nextion.hmi.tft`
-   byte-for-byte, resources copied).  Then wire `nxt compile <in> -o <out>`
-   and fix the "future nxt compile" wording in `nxt.py`.
+- **slot 0 (init)** — `tft_init_encoder.encode_init_block` with an
+  `attr_addr` resolver returning the GLOBAL binattinf record index (page
+  cumulative record count + the attr's attstr-slot value), `setbrush`
+  overridden to `09 1c 08`, and pic/picc→bco aliasing.
+- **slot 1 (auto-fill)** — `fill x,y,w,h, LOAD(page_bco)`, plus a
+  `ref <id>` for each *overlapping* visual neighbour (z-order cross-redraw;
+  s0↔m0 on page 0 was the only overlap pair).
+- **Hotspot** — slot 1 press-fill (+ overlap refs), slot 2 = `page N` nav.
+- **Timer** — slot 4 = compiled `codestimer` cascade prefixed with the `S`
+  suspend marker (the captured `PROJECT_S_BIAOJI`).
+- **Slider** — slots 2/3/4 = compiled codesdown/up/slide.
+- **Button** — slot 0 init (cjmp press/release), slot 1 fill, slot 2 =
+  `val=1` + self-ref (`ref <id>+long(65535)`) + user codesdown, slot 3 =
+  `val=0` + self-ref.
+- Event-script `<comp>.<attr>` refs resolve to GLOBAL binattinf record
+  indices via `build_page_attr_offsets`.
+
+**EVERY content region now generates byte-exact** (event regions, media
+blobs, binattinf, frame image, page-init, name-hash, AppAllvas, objxinxi
+frame, page-dir frame).
+
+### Remaining for byte-identical end-to-end `compile(HMI) == reference`
+
+1. **Offset back-patch (item #3)** — track each chain's offset during
+   event-region assembly to fill objxinxi `init_off` + 5 event slots +
+   `attstr_bytecode_offset`, and the page-dir `hexpos`/`attdataaddr_rel`.
+   Most rules verified; edge cases to handle: `attstr_bytecode_offset` ==
+   `init_off` when slot 0 present, else `first_slot − 4` (Hotspot/Slider),
+   `first_slot − 13` (Timer's S-marker entry), and a media-frame pointer
+   for Variables (no slots — `0x10ba…`, +4 each). `page-dir attdataaddr_rel[i]
+   = attdataaddr + sum(prior record counts)*24` (verified).
+2. **Header generation** — the 0x9e-byte usercode header (global memory
+   directory 0x48 + 4-entry page name-hash + MainCode = compiled
+   `Program.s`).  MainCode mostly compiles from Program.s via
+   `compile_handler` (one trailing `page 0` block + terminator still to
+   pin); the global dir is a fixed TLV; the name-hash is the page names.
+3. **End-to-end `compile_hmi(path) -> tft_bytes`** assembling header +
+   per-page[event region + media blob] + AppAllvas + binattinf + generated
+   objxinxi/page-dir (back-patched) + copied resources (0x10000–0x70000,
+   out of scope) + resealed H1/H2 + 3 CRCs.  Add
+   `tests/sim/test_compile_hmi_end_to_end.py` (== `source/nextion.hmi.tft`).
+   Then wire `nxt compile <in> -o <out>` + fix the "future nxt compile"
+   wording in `nxt.py`.
 
 ## 1. Script compiler — open work
 
