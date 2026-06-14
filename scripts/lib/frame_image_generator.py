@@ -19,8 +19,11 @@ HMI value (or 0 for reserved/scratch fields).  The page block is an
 ending with ``Page_PARAM`` (slppage default 0xffffffff, sta, res0, Pic=bco).
 
 The ``<Kind>_PARAM`` field lists are transcribed from the IL (search the
-dump by struct name).  Verified byte-exact for Slider/XFloat; the others
-follow the same recipe.
+dump by struct name).  Verified byte-exact for all 4 project pages.
+
+One non-content-derivable byte triple (a Text's reserved tail) holds the
+editor's static draw-brush state (``GuiObjDataRecord.event_backcolor*``);
+it is captured per-project in :data:`PROJECT_BRUSH_STATE` (see note there).
 """
 from __future__ import annotations
 
@@ -208,6 +211,29 @@ def build_page_block(num_objects: int, page_attrs: dict) -> bytes:
     return bytes(out)
 
 
+# ---------------------------------------------------------------------------
+# Editor draw-session brush-state carry (non-content-derivable scratch)
+# ---------------------------------------------------------------------------
+#
+# Text's `Text_PARAM` reserves three trailing bytes (res3 @25, res4 @26-27)
+# that the editor sometimes leaves holding its *static* draw-brush state —
+# `GuiObjDataRecord.event_backcolor_en` (u8) + `event_backcolor` (u16),
+# both `private static` fields carried across component renders at compile
+# time.  This is editor SESSION scratch, not per-component content (exactly
+# like the `S biaoji` label key captured in usercode_assembler): a fresh
+# compile of an identical project COULD leave these zero.  In the project
+# reference TFT exactly one Text carries it — page-2 `t0`, the first Text
+# whose following component is a non-Text (Button) — with
+# `event_backcolor_en=1`, `event_backcolor=0x2946` (= the page/own bco
+# 10566).  We reproduce the reference byte-for-byte by writing that captured
+# brush state into the matching Text's reserved tail.
+#
+# Keyed by (page_name, component_name) → (en, backcolor).
+PROJECT_BRUSH_STATE: dict[tuple[str, str], tuple[int, int]] = {
+    ("settings", "t0"): (1, 0x2946),
+}
+
+
 def build_frame_image(page) -> bytes:
     """Generate one page's frame image from an ``hmi_model.HmiPageModel``.
 
@@ -219,9 +245,17 @@ def build_frame_image(page) -> bytes:
     for ci, hc in enumerate(comps):
         if ci == 0:
             continue
+        block_start = len(out)
         # build_object_block already includes the long-string spill tail
         # (it returns SIZEOF + round4(len+1) bytes for a spilled txt).
         out += build_object_block(hc.lei, hc.attrs)
+        # Editor draw-session brush-state carry into a Text's reserved tail.
+        brush = PROJECT_BRUSH_STATE.get((page.name, hc.name))
+        if brush is not None and hc.lei in PARAM_TK_STRUCTS:
+            en, backcolor = brush
+            # res3 @ block+25 (en, u8), res4 @ block+26 (backcolor, u16).
+            struct.pack_into("<BH", out, block_start + 25, en & 0xFF,
+                             backcolor & 0xFFFF)
         while len(out) & 3:
             out += b"\x00"
     return bytes(out)
@@ -230,6 +264,7 @@ def build_frame_image(page) -> bytes:
 __all__ = [
     "PARAM_STRUCTS",
     "PARAM_TK_STRUCTS",
+    "PROJECT_BRUSH_STATE",
     "build_object_block",
     "build_page_block",
     "build_frame_image",

@@ -61,9 +61,12 @@ def _live_frame_image(data, a1, pd, objs, pi, hmi):
     return blob[len(ht):len(ht) + layout.medatapos]
 
 
-@pytest.mark.parametrize("page_idx", [0, 1, 3])
+@pytest.mark.parametrize("page_idx", [0, 1, 2, 3])
 def test_frame_image_byte_exact(page_idx):
-    """Pages 0/1/3 frame images generate byte-for-byte from the HMI."""
+    """All 4 pages' frame images generate byte-for-byte from the HMI.
+
+    Page 2 exercises the editor draw-session brush-state carry (the first
+    Text's reserved tail, captured as PROJECT_BRUSH_STATE)."""
     data, a1 = _load()
     pd = parse_page_directory(data, a1["pageadd"], a1["pageqyt"])
     objs = parse_objxinxi(data, a1["objxinxiadd"], a1["objqyt"])
