@@ -265,50 +265,62 @@ The **frame image** is `databianyi.Private_Memory.initDatas[page]` — the
 editor's `StructHtoL` serialization of each object's `<Kind>_PARAM` struct
 into per-page private RAM.  Its length is the page's `medatapos`.
 
-**Major progress (2026-06-13): the per-field layout IS the attposup table,
-shifted by +8, filled with authored values.**  Verified field-for-field on
-Slider, Text, Button, AND XFloat: every RAM-backed attribute lands at
-`frame_offset = attposup + 8` carrying its *authored* HMI value (0xff where
-unset).  Examples (all exact):
-- Slider h0: bco@(6+8=14)=0x2946, pco@16=0x6394, val@18=100, maxval@20=100,
-  minval@22=5, ch@24=25; wid/hig@11/12=0xff (authored 255).
-- Text t0: pco@10=0xffde, bco@12=0x2946, xcen/ycen@14/15=1, pw@16=0,
-  txt buffer@17="Brightness\0".
-- Button b0: bco@10, bco2@12, pco@14, pco2@16, txt@21="Update".
-- XFloat: sta@8, font@13, bco@14, pco@16, xcen/ycen@18/19, val@20.
+**FULLY DECODED via the hmitype.dll IL (2026-06-13).** With
+`/tmp/hmitype_all.il` available, the frame image is now completely
+understood and one block is verified byte-exact:
 
-So a per-object block = `[8-byte head] [attposup-ordered fields with
-authored values, 0xff default]`.  The 8-byte head's contents are still
-undecoded (Text head `0000 d1f7 0000 0000`; Slider head `ffffffff
-0100 4629`).
+- **The frame block IS the `<Kind>_PARAM` struct**, serialized with the
+  authored HMI values, `0` (or `0xff` for some color/picid defaults) in the
+  reserved/scratch fields.  Field offsets are the struct's natural layout
+  (which equals the attposup table — my earlier "+8" was an artefact of a
+  wrong page-block size).  Each struct def is in the IL: search by name,
+  e.g. `Slider_PARAM` = Mode,BackType,CursorType,CursorWid,CursorHig,dis,
+  BkPicID(=bco),CuPicID(=pco),NowVal(=val),MaxVal,MinVal,ch,res,TouchPos,
+  LastVal,pic(=bco1),CursorTureW,CursorTureH,res1 (28 B = SIZEOF[1]).
+- **VERIFIED byte-exact:** building the page-2 Slider block from its
+  authored attrs (mode0,sta1,wid/hig255,dis100,bco10566,pco25492,val100,
+  maxval100,minval5,ch25,bco1 63441; scratch fields 0) reproduces the live
+  28-byte block exactly.
+- **Text/Button use the `*_PARAM_tk` packed runtime layout** for the
+  rendered fields + an inline txt buffer: e.g. Text t0 = `Text_PARAM_tk`
+  (font,isbr,pco,pic=bco,xcen,ycen,pw = 9 B) then the 16-byte txt buffer
+  ("Brightness\0…"); the long-string spill extends the buffer.
+- **Block layout:** `[page block][per-object blocks: SIZEOF each,
+  4-aligned, long-string spill as in media_allocator]`.  The page block is
+  `[8-byte head: 0xff…][Page_PARAM: slppage(u32 default 0xffffffff), sta,
+  res0, Pic(=bco)]` (page-2: 16 B; page-1: 12 B — the head/slppage size
+  varies, pin it from `Page_PARAM_Head` = objdata_Ram + objeffecttype).
 
-**Block layout SOLVED (2026-06-13):** the file frame image is laid out as
-`[page block: 32 bytes] [per-object blocks: SIZEOF_OBJDATA_T1 each,
-4-aligned, with the same long-string spill as the runtime allocator]`.
-This is NOT the runtime `objdatarampos` layout (page block there is 8, here
-32; the file frame omits the `16+4*ceil(n/4)` runtime prefix).  Verified:
-all 10 page-0 Text blocks land at the computed bases (t0@256 … s0@508) with
-`txt` at `base + attposup(9) + 8`, and every numeric field at
-`base + attposup + 8` carries its authored value.  Computed total 592 vs
-medatapos 600 — an 8-byte gap that lives in the page block (likely 40, not
-32) or a trailing struct; pin it.
+So the remaining work is **mechanical, not blocked**: pull each
+`<Kind>_PARAM` field list from the IL (Slider/Text/Button/Xfloat/Prog/Timer/
+Vari/Page already extracted into the session notes), map HMI attrs →
+struct fields, serialize with the scratch-default rule, handle the txt
+inline buffer + spill, and emit the page block.  Then byte-diff per page.
 
-**The ONE remaining blocker — the per-block 8-byte head.** Each object's
-block = `[8-byte head][attposup+8 field body]`.  The field body is fully
-derivable (authored values / 0xff).  The 8-byte head is NOT a clean
-constant and is the unresolved piece: e.g. page-0 XFloat heads are
-`ffffffff01004629` (x0), `0000000001000000` (x1), `0001000001000000` (x4),
-`000032194629cdfd` (x6) — they carry real values (`4629`=bco, `cdfd`=…) in
-a pattern that needs the `<Kind>_PARAM` *Head* struct definition to
-decode.  Without the IL struct defs (`/tmp/hmitype_all.il`, not present in
-this environment) the head content can't be reproduced byte-exact; the
-field body + block layout are done.
+**IMPLEMENTED (2026-06-13):** `scripts/lib/frame_image_generator.py`
+(`tests/sim/test_frame_image_generator.py`).  **Pages 0, 1, 3 generate
+byte-exact** — Page, Hotspot, XFloat, Prog, Text (incl. the s0 long-string
+contiguous spill), Timer, and the 4-byte Variable `val` block.  Findings
+wired in:
+- page block = `8 + 4*ceil(num_objects/4)` bytes (0xff fill) ending in
+  `Page_PARAM` (slppage 0xffffffff, sta, res0, Pic=bco);
+- object block = `<Kind>_PARAM` struct, fields at struct offsets, authored
+  values, scratch/reserved fields = 0;
+- XFloat `borderc`/`borderw` are NOT serialized (stay 0) even when authored;
+- Variable block is just the 4-byte int32 `val` (Vari_PARAM_tk), not the
+  full 12-byte Vari_PARAM;
+- Text/Button use the `*_PARAM_tk` packed prefix + inline txt buffer (16/11);
+  a spilled txt is written contiguously across the buffer + a `round4(len+1)`
+  tail.
 
-Practical upshot: the frame image is ~90% reversed (layout + field body +
-authored fill); the residual 8-byte-head-per-block (and the page block's
-exact 32-vs-40 size) is blocked on the hmitype.dll IL struct dump.  Re-
-extract `attrs-raw.txt`-style struct layouts (`<Kind>_PARAM_Head` field
-order/widths) from the IL to finish.
+**Residual (page 2 only, 3 bytes):** the first Text block's reserved tail
+(`Text_PARAM` bytes 25-27) is `01 4629` (= a `01` flag + the page/own bco
+`0x2946`) on page 2, but `00 0000` on every page-0 Text.  The difference
+correlates with the *next* component being a different type (Button on
+page 2; Text→Text on page 0).  Likely an editor "last-drawn-brush colour"
+cache written at a type transition; pin the exact trigger (one fixture
+with a Text immediately followed by a non-Text on a fresh page would
+confirm), then the frame image is 4/4 pages exact.
 
 The **page-init chain** (after the frame image) is the page
 pseudo-component's own event chains, in the per-component event format:
@@ -323,17 +335,23 @@ compiler + the L-marker patcher; the frame image is the hard blocker.
 
 ### Next concrete steps (dependency order)
 
-1. **Frame-image `<Kind>_PARAM` layouts (gap 4, BLOCKED)** — needs the
-   `hmitype.dll` IL struct dump (re-extract `/tmp/hmitype_all.il`) to get
-   each class's field order + the pre-fill rule. Without it this region
-   stays copied. The page-init chain part is unblocked (script compiler +
-   L-marker patcher) and can be generated independently.
-2. **Offset back-patch (item #3)** — gated on gap 4: `hexpos` points into
-   the media blob, so region sizes (hence objxinxi.init_off + 5 slots +
+1. **Frame-image generator (gap 4, UNBLOCKED)** — implement
+   `frame_image_generator.py`: per-class `<Kind>_PARAM` field layout (from
+   the IL, search by struct name) + HMI-attr→field map + scratch-default
+   rule + txt inline buffer/spill + the page block.  Verified approach
+   (Slider block byte-exact).  Build type-by-type, byte-diffing each
+   object block, then each whole page.
+2. **Page-init chain** — the page pseudo-component's event chains
+   (compiled via the existing script compiler) + per-component scroll
+   init + the constant `09 22 08` block + the L-marker (patch_l_markers
+   already does the addr).  Unblocked.
+3. **Offset back-patch (item #3)** — once the media blobs generate,
+   region sizes are fixed; fill objxinxi.init_off + 5 slots +
    attstr_bytecode_offset, page-dir hexpos/attdataaddr_rel, appinf1
-   pointers) aren't fixed until the media blobs are generated.
-3. **`nxt compile` subcommand (item #5)** — once the above make
-   `compile(HMI) == reference TFT` byte-identical.
+   pointers.
+4. **`nxt compile` subcommand (item #5)** — once the above make
+   `compile(HMI) == reference TFT` byte-identical; add the end-to-end test
+   and fix the "future nxt compile" wording in `nxt.py`.
 
 ## 1. Script compiler — open work
 
