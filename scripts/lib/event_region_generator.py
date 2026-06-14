@@ -54,12 +54,46 @@ ATTR_ALIASES = {
 FILL_OPCODE = bytes.fromhex("090d04")
 # page opcode (hotspot nav) — `09 0b 04`.
 PAGE_OPCODE = bytes.fromhex("090b04")
-# ref opcode (refresh) — `09 03 04`.  A Text whose txt overflows its inline
-# buffer gets a `ref <len+1>` appended to its auto-fill (slot 1) — the
-# marquee/long-string redraw.
+# ref opcode (refresh) — `09 03 04`.  When two visual components' bounding
+# boxes overlap, each one's auto-fill (slot 1) gets a `ref <other_id>`
+# appended so the editor redraws the overlapped neighbour after a
+# background restore (z-order overlap resolution).
 REF_OPCODE = bytes.fromhex("090304")
-# Text inline txt buffer (bytes); a txt whose len+1 exceeds it spills.
-TEXT_INLINE_BUFFER = 16
+
+# Component classes that participate in overlap detection (have a box).
+_VISUAL_LEIS = frozenset({59, 116, 106, 109, 1, 98})
+
+
+def _box(a):
+    x = int(a.get("x") or 0)
+    y = int(a.get("y") or 0)
+    w = int(a.get("w") or 0)
+    h = int(a.get("h") or 0)
+    return (x, y, x + w, y + h)
+
+
+def _overlaps(a, b):
+    return not (a[2] <= b[0] or b[2] <= a[0] or a[3] <= b[1] or b[3] <= a[1])
+
+
+def page_overlap_refs(components):
+    """Return ``{comp_name: [other_id, ...]}`` — for each visual component,
+    the ids of the other visual components whose bounding box overlaps it
+    (in component order).  Each such id is appended as a ``ref`` to the
+    component's auto-fill."""
+    visual = [c for c in components if c.lei in _VISUAL_LEIS]
+    boxes = {c.name: _box(c.attrs) for c in visual}
+    out = {}
+    for c in visual:
+        refs = []
+        for other in visual:
+            if other.name == c.name:
+                continue
+            if _overlaps(boxes[c.name], boxes[other.name]):
+                refs.append(int(other.attrs.get("id") or 0))
+        if refs:
+            out[c.name] = refs
+    return out
 
 _SLOT_NAME = APP_ATT_NAMES  # index → attribute name
 
@@ -140,9 +174,18 @@ def _compile_event(source, attr_offsets, *, with_s_marker=False):
     return body
 
 
+def _fill_with_refs(x, y, w, h, bco_record, overlap_ids):
+    """Auto-fill block + a ``ref <id>`` entry for each overlapping
+    neighbour."""
+    out = _fill_chain(x, y, w, h, bco_record)
+    for oid in overlap_ids:
+        out += _entry(REF_OPCODE + str(oid).encode("ascii"))
+    return out
+
+
 def build_component_chains(hc, attstr_slots, page_record_base,
                            page_bco_global, page_id,
-                           attr_offsets=None) -> CompiledComponent:
+                           attr_offsets=None, overlap_ids=None) -> CompiledComponent:
     """Build one component's per-slot chains for the event region.
 
     ``hc`` is the HMI component model; ``attstr_slots`` its attstr slot
@@ -150,7 +193,9 @@ def build_component_chains(hc, attstr_slots, page_record_base,
     ``page_bco_global`` the page's bco record (global); ``page_id`` the
     device page id (for the page fill geometry / hotspot nav).
     ``attr_offsets`` is the page-wide ``{"<comp>.<attr>": global_record}``
-    map used to compile event-script slots (Timer/Slider).
+    map used to compile event-script slots (Timer/Slider).  ``overlap_ids``
+    are the ids of visual neighbours whose box overlaps this component (a
+    ``ref <id>`` is appended to the auto-fill for each).
     """
     lei = hc.lei
     a = hc.attrs
@@ -160,6 +205,7 @@ def build_component_chains(hc, attstr_slots, page_record_base,
     h = int(a.get("h") or 0)
     resolver = make_attr_resolver(attstr_slots, page_record_base, page_bco_global)
     attr_offsets = attr_offsets or {}
+    overlap_ids = overlap_ids or []
     chains: dict[int, bytes] = {}
 
     if lei == 121:
@@ -171,9 +217,9 @@ def build_component_chains(hc, attstr_slots, page_record_base,
         return CompiledComponent(lei=lei, chains=chains)
 
     if lei == 109:
-        # Hotspot: slot 1 = press-highlight fill (own geometry, page_bco);
-        # slot 2 = navigation compiled from codesdown (`page N`).
-        chains[1] = _fill_chain(x, y, w, h, page_bco_global)
+        # Hotspot: slot 1 = press-highlight fill (own geometry, page_bco)
+        # + overlap refs; slot 2 = navigation compiled from codesdown.
+        chains[1] = _fill_with_refs(x, y, w, h, page_bco_global, overlap_ids)
         nav = hc.events.get("codesdown", "").strip()
         if nav.startswith("page "):
             chains[2] = _page_chain(int(nav.split()[1]))
@@ -209,17 +255,8 @@ def build_component_chains(hc, attstr_slots, page_record_base,
     if init:
         chains[0] = init
     # The auto-fill exists for the display components that declare slot 1
-    # in EVENT_LAYOUT (XFloat/Text/Prog/Button).
-    fill = _fill_chain(x, y, w, h, page_bco_global)
-    # A Text whose txt overflows its inline buffer gets a `ref <len+1>`
-    # long-string redraw appended to its auto-fill.
-    if lei == 116:
-        txt = a.get("txt")
-        if isinstance(txt, str):
-            blen = len(txt.encode("latin-1", "replace"))
-            if blen + 1 > TEXT_INLINE_BUFFER:
-                fill += _entry(REF_OPCODE + str(blen + 1).encode("ascii"))
-    chains[1] = fill
+    # in EVENT_LAYOUT (XFloat/Text/Prog/Button), plus overlap refs.
+    chains[1] = _fill_with_refs(x, y, w, h, page_bco_global, overlap_ids)
     return CompiledComponent(lei=lei, chains=chains)
 
 
@@ -228,5 +265,6 @@ __all__ = [
     "ATTR_ALIASES",
     "make_attr_resolver",
     "build_page_attr_offsets",
+    "page_overlap_refs",
     "build_component_chains",
 ]
