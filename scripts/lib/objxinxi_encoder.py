@@ -111,6 +111,7 @@ class ObjxinxiInputs:
     objdatarampos: int
     attstr_bytecode_offset: int   # +52; == init_off when slot 0 present
     attstr_slots: list[int]   # exactly 88 entries (u16 each)
+    vscope: bool = False      # +2 global-scope flag (vscope=1 component)
 
 
 def type_flag(lei: int) -> int:
@@ -162,7 +163,9 @@ def encode_objxinxi_entry(
     out = bytearray(OBJXINXI_ENTRY_SIZE)
     out[0] = lei & 0xFF
     out[1] = comp_id & 0xFF
-    out[2] = CONST_AT_2
+    # +2 is the global-scope flag: 1 for a ``vscope=1`` (page-global)
+    # component, otherwise the 0 constant.
+    out[2] = 1 if inputs.vscope else CONST_AT_2
     out[3] = type_flag(lei)
     struct.pack_into("<I", out, 4, inputs.init_off & 0xFFFFFFFF)
     for i, off in enumerate(inputs.slot_offsets):

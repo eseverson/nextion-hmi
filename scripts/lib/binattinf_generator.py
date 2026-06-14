@@ -229,17 +229,27 @@ def _round4(n: int) -> int:
     return (n + 3) & ~3
 
 
-def _txt_merrylenth(inline_buffer: int, txt) -> int:
+def _txt_merrylenth(inline_buffer: int, txt, txt_maxl=None) -> int:
     """The ``txt`` Sstr record's ``merrylenth`` (and ``txt_maxl`` = this
     minus 1) for a component with the given inline buffer capacity.
 
-    * String fits inline (``len+1 <= inline_buffer``): merrylenth =
-      ``inline_buffer`` (e.g. Text 16).
-    * String spills (``len+1 > inline_buffer``): the editor allocates a
-      tail of ``round4(len+1)`` bytes in the media frame and the record's
-      capacity becomes ``inline_buffer + round4(len+1) + 1`` (verified on
-      s0 "Danger to manifold!!" = 20 → 16 + 24 + 1 = 41, txt_maxl = 40).
+    The capacity is the editor's configured maximum text length + 1 (the
+    NUL), floored at the inline buffer:
+
+      * ``txt_maxl + 1`` when the HMI declares a ``txt_maxl`` larger than
+        the inline buffer (the configured field width, **independent of the
+        current ``txt`` string** — the live s0 has ``txt=''`` but
+        ``txt_maxl=40`` → 41); else
+      * ``inline_buffer`` (e.g. Text 16, Button 11).
+
+    The current string's *spill* into the media frame is a separate concern
+    (the media allocator), but its capacity coincides: a fitting string
+    keeps the inline buffer, and a string sized to ``txt_maxl`` spills to
+    the same ``txt_maxl + 1`` (verified on the source s0
+    "Danger to manifold!!" = 20 → 16 + 24 + 1 = 41 = ``txt_maxl + 1``).
     """
+    if txt_maxl is not None:
+        return max(inline_buffer, int(txt_maxl) + 1)
     if not isinstance(txt, str):
         return inline_buffer
     blen = len(txt.encode("latin-1", "replace"))
@@ -268,10 +278,14 @@ def _head_records(lei, comp_id, x, y, w, h, objdatarampos, frompageid,
     return out
 
 
-def _vscope_record(objdatarampos, frompageid, fromobjid) -> AttRecord:
+def _vscope_record(objdatarampos, frompageid, fromobjid,
+                   is_global=False) -> AttRecord:
+    # The vscope record's attmemorypos flags global scope: 1 for a
+    # ``vscope=1`` (page-global) component, 0 for a page-local one.
     tv, df = ATTSHULEI_BY_NAME["UU8"]
     return AttRecord(
-        name="vscope", attmemorypos=0, num_maxval=1, num_minval=0,
+        name="vscope", attmemorypos=1 if is_global else 0,
+        num_maxval=1, num_minval=0,
         objdatarampos=objdatarampos, frompageid=frompageid,
         fromobjid=fromobjid, str_encodeh_star=0, att_changeid=0,
         typevalue=tv, datafenpei=df,
@@ -338,7 +352,9 @@ def build_component_binattinf(
     records: dict[str, AttRecord] = {}
     records.update(_head_records(lei, comp_id, x, y, w, h,
                                  objdatarampos, frompageid, fromobjid))
-    records["vscope"] = _vscope_record(objdatarampos, frompageid, fromobjid)
+    records["vscope"] = _vscope_record(
+        objdatarampos, frompageid, fromobjid,
+        is_global=bool(authored.get("vscope") == 1))
 
     # txt buffer capacity (merrylenth field for the txt Sstr record) — the
     # inline buffer when the string fits, else inline + round4(len+1) + 1
@@ -346,7 +362,8 @@ def build_component_binattinf(
     txt_merrylenth = None
     if lei in INLINE_TXT_BUFFER:
         txt_merrylenth = _txt_merrylenth(
-            INLINE_TXT_BUFFER[lei], authored.get("txt"))
+            INLINE_TXT_BUFFER[lei], authored.get("txt"),
+            authored.get("txt_maxl"))
 
     # datafrom (RAM-backed) render records: attmemorypos = frame offset.
     for da in DATAFROM_ATTRS[lei]:

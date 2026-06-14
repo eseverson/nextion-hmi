@@ -139,6 +139,7 @@ def assemble_usercode_and_layout(hmi, program_s, app_allvas_qty,
         orefs = page_overlap_refs(hp.components)
 
         comp_layouts = []
+        var_end_cursor = None   # cursor right after the last Variable emitted
         for hc, o in zip(hp.components, po):
             cc = build_component_chains(
                 hc, list(o.slots), base, page_bco, hp.page_id,
@@ -146,6 +147,8 @@ def assemble_usercode_and_layout(hmi, program_s, app_allvas_qty,
             comp_start = len(out)
             stream, _, slot_offsets = _emit_component_event(cc, comp_start)
             out += stream
+            if hc.lei == 52:
+                var_end_cursor = len(out)
             cl = ObjxinxiLayout()
             cl.attstr_bytecode_offset = comp_start
             cl.init_off = slot_offsets.get(0, SENTINEL)
@@ -158,14 +161,19 @@ def assemble_usercode_and_layout(hmi, program_s, app_allvas_qty,
         hexpos = len(out)
 
         # Variables (lei 52) emit no event stream; their
-        # ``attstr_bytecode_offset`` points into the page event region's
-        # trailing terminator zone — one 4-byte slot each, ending just
-        # before the media blob: var[k] = hexpos - 4*(num_vars - k).
+        # ``attstr_bytecode_offset`` points into the terminator zone right
+        # after the Variable group — one 4-byte slot each, ending where the
+        # group's region does: var[k] = var_base - 4*(num_vars - k).  The
+        # base is the cursor immediately after the last Variable (== the
+        # media start only when the Variables are the page's last objects;
+        # if a component follows them — e.g. the live page-0 back-nav hotspot
+        # m1 — the base is *before* that component's event chain).
         var_layouts = [cl for hc, cl in zip(hp.components, comp_layouts)
                        if hc.lei == 52]
         nvar = len(var_layouts)
+        var_base = var_end_cursor if var_end_cursor is not None else hexpos
         for k, cl in enumerate(var_layouts):
-            cl.attstr_bytecode_offset = hexpos - 4 * (nvar - k)
+            cl.attstr_bytecode_offset = var_base - 4 * (nvar - k)
 
         brush_state = profile.brush_state if profile else None
         media = _build_media_blob_for_page(hp, pi, counts, po, base,
@@ -403,7 +411,8 @@ def compile_hmi(hmi_path, resources_source) -> bytes:
                     init_off=cl.init_off, slot_offsets=cl.slot_offsets,
                     objdatarampos=media.objdatarampos[ci],
                     attstr_bytecode_offset=cl.attstr_bytecode_offset,
-                    attstr_slots=attstr_tables[pi][ci].slots))
+                    attstr_slots=attstr_tables[pi][ci].slots,
+                    vscope=(pa.get("vscope") == 1)))
 
     # page directory (object counts + generated hexpos/attdataaddr_rel;
     # medatapos generated).

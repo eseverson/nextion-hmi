@@ -83,10 +83,11 @@ _PROJECT_SCRATCH = {
         "s_biaoji": 0x0F71FD,
         "brush_state": {("settings", "t0"): (1, 0x2946)},
     },
-    # live project — captured from tests/fixtures/live/nextion.hmi.tft.
+    # live project — captured from tests/fixtures/live/nextion.hmi.tft
+    # (same settings/t0 draw-brush carry as the source).
     "D": {
         "s_biaoji": 0x0F71FD,
-        "brush_state": {},
+        "brush_state": {("settings", "t0"): (1, 0x2946)},
     },
 }
 
