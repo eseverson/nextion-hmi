@@ -8,18 +8,23 @@ driver/font composition, not project content).
 Pipeline (all sub-generators verified byte-exact in their own tests):
 
   usercode region (strdataaddr..pageadd):
-    header                      copied from reference (global dir + page
-                                name-hash + MainCode; header generation is
-                                a follow-up — see findings)
+    header                      header_generator (global memory directory +
+                                page name-hash + MainCode = compiled Program.s)
     per page: event region      event_region_generator + assemble_event_region
               media blob         media_blob_generator
     AppAllvas                    hmi_model.build_appallvas
     binattinf                    binattinf_generator (all pages)
   objxinxi table                 objxinxi_encoder (frame) + back-patched
-                                 offsets tracked during event-region assembly
+                                 offsets + GENERATED attstr 88-slot tables
   page directory                 page_dir_encoder (frame) + back-patched
                                  hexpos / attdataaddr_rel
-  resources                      copied from reference (out of scope)
+  prefix [0..strdataaddr)        copied from resources_source — H1/H2/appinf
+                                 framing + the out-of-scope resources blob
+                                 (0x10000..0x70000). appinf1 is reused here,
+                                 correct for same-resources recompiles; a
+                                 structural edit would regenerate it via
+                                 compute_appinf1 (which is partly resources-
+                                 coupled — see findings).
   H1 / H2 / 3 CRCs               resealed
 
 This module is the integration of the per-region generators; its
