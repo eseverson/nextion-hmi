@@ -29,6 +29,14 @@ output equals ``source/nextion.hmi.tft`` byte-for-byte.
 from __future__ import annotations
 
 import struct
+import sys
+from pathlib import Path
+
+# The script compiler imports its `script_compiler_extras` sibling by bare
+# name, so `scripts/lib` must be importable regardless of entry point.
+_LIB_DIR = Path(__file__).resolve().parent
+if str(_LIB_DIR) not in sys.path:
+    sys.path.insert(0, str(_LIB_DIR))
 
 from scripts.lib.usercode_assembler import EVENT_LAYOUT, patch_l_markers
 from scripts.lib.hmi_model import (

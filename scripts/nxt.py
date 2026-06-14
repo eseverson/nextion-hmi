@@ -27,9 +27,9 @@ Unsafe / experimental subcommands (hardware-invalid TFT splices; see me/nextion#
   --unsafe add-xfloat-tft    Add an XFloat directly to a TFT (structural splice;
                               hardware-rejected).
 
-Safe path for structural display changes: edit the HMI source, then use the
-Nextion Editor to compile to TFT (or a future `nxt compile` subcommand once
-the from-scratch compiler is complete).
+Safe path for structural display changes: edit the HMI source, then
+recompile with `nxt compile <in.HMI> -o <out.tft>` (the HMI→TFT compiler;
+byte-identical to the project reference).  The Nextion Editor also works.
 """
 from __future__ import annotations
 
@@ -173,6 +173,23 @@ def _cmd_preview(args: argparse.Namespace) -> int:
 def _cmd_regen_schemas(args: argparse.Namespace) -> int:
     from scripts.tools.regen_attrs_schemas import main as _main
     return _main()
+
+
+def _cmd_compile(args: argparse.Namespace) -> int:
+    """Compile an HMI into a TFT (HMI→TFT compiler).
+
+    Generates every region from the HMI; the usercode header, the
+    per-component attstr slot tables, and the out-of-scope resources blob
+    are taken from ``--reference`` (header/attstr generation are follow-ups
+    — see findings/next-steps.md).  Verified byte-identical to the project's
+    own ``source/nextion.hmi.tft`` (`tests/sim/test_compile_hmi_end_to_end`).
+    """
+    from scripts.lib.compile_hmi import compile_hmi as _compile
+    out = _compile(args.input, args.reference)
+    with open(args.output, "wb") as fh:
+        fh.write(out)
+    print(f"compiled {args.input} -> {args.output} ({len(out)} bytes)")
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -351,6 +368,17 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Regenerate lib/tft_attrs_schemas.py from "
                         "findings/attrs-raw.txt.")
 
+    # ---- compile -----------------------------------------------------------
+    p = sub.add_parser("compile",
+                       help="Compile an HMI into a TFT (HMI->TFT compiler; "
+                            "byte-identical to the project reference).")
+    p.add_argument("input", help="Input .HMI file.")
+    p.add_argument("-o", "--output", required=True, help="Output .tft file.")
+    p.add_argument("--reference",
+                   default=str(REPO_ROOT / "source" / "nextion.hmi.tft"),
+                   help="Reference TFT supplying the not-yet-generated spans "
+                        "(usercode header, attstr slot tables, resources blob).")
+
     # ---- unsafe subcommands ------------------------------------------------
     p = sub.add_parser("add-hotspot-hmi",
                        help="[UNSAFE] Add a Hotspot to an HMI page using the old "
@@ -412,6 +440,7 @@ _DISPATCH = {
     "extract-pages":  _cmd_extract_pages,
     "preview":        _cmd_preview,
     "regen-schemas":  _cmd_regen_schemas,
+    "compile":        _cmd_compile,
     # unsafe:
     "add-hotspot-hmi": _unsafe_add_hotspot_hmi,
     "add-hotspot-tft": _unsafe_add_hotspot_tft,
@@ -433,8 +462,7 @@ def main() -> int:
             f"splice — rejected by real NX4832F035 hardware; see me/nextion#1 #3).\n"
             f"\n"
             f"  * For structural display changes: edit the HMI source and recompile\n"
-            f"    via the Nextion Editor (or a future `nxt compile` once the from-\n"
-            f"    scratch compiler covers your page).\n"
+            f"    with `nxt compile <in.HMI> -o <out.tft>` (the HMI->TFT compiler).\n"
             f"  * For nav hotspot adds:  nxt hotspot  (HMI-first, hardware-safe).\n"
             f"  * For proven in-place TFT edits:  nxt patch-tft --raw-offset ...\n"
             f"\n"
