@@ -374,8 +374,10 @@ def compile_hmi(hmi_path, resources_source) -> bytes:
     app_allvas_qty = len(parse_program_globals(program_s))
 
     # Editor-version constants come from the reference TFT's H1 version
-    # letter; per-project editor scratch (S biaoji + Text brush state) is
-    # captured against this project's own reference (the oracle).
+    # letter; per-project editor scratch (Text draw-brush state) is
+    # captured against this project's own reference (the oracle).  The S
+    # suspend biaoji is no longer captured here — it is DERIVED in
+    # usercode_assembler.suspend_biaoji (me/miata-dash#40).
     scratch = project_scratch_for(data, hmi)
     profile = profile_for(data, **scratch)
 

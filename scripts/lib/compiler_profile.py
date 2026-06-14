@@ -11,9 +11,14 @@ from the TFT's H1 header byte at offset ``0x02`` (an editor version letter:
 module maps that to a :class:`CompilerProfile` of the version-dependent
 constants the generators need.
 
-Also captured here are the genuinely **non-content-derivable per-project
-editor-scratch constants** (the ``S`` suspend biaoji, the Text draw-brush
-state) — keyed per project, NOT a single global, so both fixtures compile.
+Also captured here is the genuinely **non-content-derivable per-project
+editor-scratch** — the Text draw-brush state — keyed per project so both
+fixtures compile.
+
+(The ``S`` suspend biaoji used to be captured here too; it is now DERIVED in
+``usercode_assembler.suspend_biaoji`` — the editor's fixed first-suspend-marker
+seed, identical for every project — so it no longer needs per-project
+capture; see me/miata-dash#40.)
 """
 from __future__ import annotations
 
@@ -41,9 +46,6 @@ class CompilerProfile:
     objects into a prefix slot)."""
 
     # ── per-project editor session scratch (non-content-derivable) ──────────
-    s_biaoji: int = 0
-    """The ``S`` suspend marker's global label key for this project's Timer
-    handler (the editor's monotonic allocator state)."""
     brush_state: dict = field(default_factory=dict)
     """``{(page_name, comp_name): (en, backcolor)}`` — the static
     draw-brush state the editor leaves in a Text's reserved tail."""
@@ -78,15 +80,13 @@ _VERSION_LETTER_CONST = {
 # 'D' = the live project.  Each set is captured from that project's own
 # reference TFT (the oracle), NOT shared.
 _PROJECT_SCRATCH = {
-    # source fixture (S biaoji + the page-2 t0 brush state)
+    # source fixture (the page-2 t0 draw-brush state)
     "C": {
-        "s_biaoji": 0x0F71FD,
         "brush_state": {("settings", "t0"): (1, 0x2946)},
     },
     # live project — captured from tests/fixtures/live/nextion.hmi.tft
     # (same settings/t0 draw-brush carry as the source).
     "D": {
-        "s_biaoji": 0x0F71FD,
         "brush_state": {("settings", "t0"): (1, 0x2946)},
     },
 }
@@ -98,11 +98,10 @@ def detect_version_letter(tft_bytes: bytes) -> str:
 
 
 def project_scratch_for(tft_bytes: bytes, hmi=None) -> dict:
-    """The per-project editor-session scratch (``s_biaoji``,
-    ``brush_state``) captured against the project that produced
-    ``tft_bytes``, keyed by the editor version letter.  ``hmi`` is accepted
-    for forward-compatibility (a future project key may need it) but is
-    currently unused."""
+    """The per-project editor-session scratch (``brush_state``) captured
+    against the project that produced ``tft_bytes``, keyed by the editor
+    version letter.  ``hmi`` is accepted for forward-compatibility (a future
+    project key may need it) but is currently unused."""
     letter = chr(tft_bytes[0x02])
     scratch = _PROJECT_SCRATCH.get(letter)
     if scratch is None:
@@ -112,17 +111,15 @@ def project_scratch_for(tft_bytes: bytes, hmi=None) -> dict:
             f"add it to compiler_profile._PROJECT_SCRATCH"
         )
     return {
-        "s_biaoji": scratch["s_biaoji"],
         "brush_state": dict(scratch["brush_state"]),
     }
 
 
-def profile_for(tft_bytes: bytes, *, s_biaoji: int = 0,
+def profile_for(tft_bytes: bytes, *,
                 brush_state: dict | None = None) -> CompilerProfile:
     """Build the :class:`CompilerProfile` for the editor that produced
-    ``tft_bytes``.  The per-project scratch values (``s_biaoji``,
-    ``brush_state``) are passed in by the caller (derived from / captured
-    against that project's own reference TFT)."""
+    ``tft_bytes``.  The per-project scratch (``brush_state``) is passed in by
+    the caller (captured against that project's own reference TFT)."""
     letter = tft_bytes[0x02]
     const = _VERSION_LETTER_CONST.get(letter)
     if const is None:
@@ -137,7 +134,6 @@ def profile_for(tft_bytes: bytes, *, s_biaoji: int = 0,
         timerset_opcode=const.get("timerset_opcode", bytes.fromhex("092308")),
         sysvar_overrides=dict(const["sysvar_overrides"]),
         frame_prefix=const.get("frame_prefix", 0x10),
-        s_biaoji=s_biaoji,
         brush_state=dict(brush_state or {}),
     )
 

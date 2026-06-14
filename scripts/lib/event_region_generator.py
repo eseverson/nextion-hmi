@@ -36,7 +36,7 @@ import struct
 
 from scripts.lib.tft_attrs_encoder import APP_ATT_NAMES
 from scripts.lib.tft_init_encoder import encode_init_block, Component
-from scripts.lib.usercode_assembler import CompiledComponent, PROJECT_S_BIAOJI
+from scripts.lib.usercode_assembler import CompiledComponent, suspend_biaoji
 from scripts.lib.script_compiler import compile_event_handler, CompileContext
 
 # Default ``setbrush`` opcode head (nxt-1.65.1 / the source fixture); newer
@@ -201,15 +201,20 @@ def build_page_attr_offsets(components, per_page_objs, page_record_base):
 def _compile_event(source, attr_offsets, *, with_s_marker=False, profile=None):
     """Compile an HMI event script to its chain body, resolving
     ``<comp>.<attr>`` refs to global record indices.  ``with_s_marker``
-    prepends the project's ``S`` suspend marker (Timer); its biaoji and any
-    sysvar-index overrides come from ``profile``."""
+    prepends the ``S`` suspend marker (Timer); its biaoji is DERIVED via
+    :func:`suspend_biaoji` (the fixed editor seed for the first suspend
+    marker — our only case), and any sysvar-index overrides come from
+    ``profile``."""
     overrides = dict(profile.sysvar_overrides) if profile else {}
     ctx = CompileContext(sysvar_overrides=overrides)
     ctx.component_offsets = dict(attr_offsets)
     ctx.globals = {"sys0": 0, "sys1": 4, "sys2": 8}
     body = compile_event_handler(source, ctx)
     if with_s_marker:
-        biaoji = profile.s_biaoji if profile else PROJECT_S_BIAOJI
+        # Our compiler emits exactly one suspend marker (the single Timer);
+        # its biaoji is the derived index-0 seed, not a captured per-project
+        # constant (me/miata-dash#40).
+        biaoji = suspend_biaoji(0)
         s_entry = _entry(b"\x53\x20\x03" + struct.pack("<I", biaoji))
         return s_entry + body
     return body

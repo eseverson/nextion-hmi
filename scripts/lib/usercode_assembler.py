@@ -45,11 +45,14 @@ Timer Event) opens with a 7-byte ``S`` marker entry
     byte immediately following the S marker's payload (the handler body
     entry).  :func:`patch_l_markers` performs this back-patch once the
     final layout is known.
-  * ``S.biaoji`` is the editor's monotonic global label key.  It is *not*
-    derivable from project content (it depends on the editor's allocator
-    call order across the whole compile).  The assembler treats it as a
-    captured per-handler constant; for the project that single value is
-    ``0x0F71FD`` (see :data:`PROJECT_S_BIAOJI`).
+  * ``S.biaoji`` is the editor's **S↔L pairing key** (``Makestrsbytes``
+    matches an ``L`` to its ``S`` by equal biaoji, then patches the ``L`` to
+    ``S_offset + 11``).  It is DERIVED, not captured: the first suspend
+    marker a project emits always gets the fixed editor seed ``0x0F71FD``,
+    invariant under structural edits to the handler (see
+    :func:`suspend_biaoji` and the allocator note below; me/miata-dash#40).
+    Our compiler emits exactly one suspend marker (the Timer), so that seed
+    is the whole story for this project.
 
 This module's :func:`assemble_event_region` re-emits one page's
 event-block region from a list of :class:`CompiledComponent` descriptors
@@ -65,12 +68,71 @@ from typing import Optional
 
 TERM = b"\x00\x00\x00\x00"
 
-# The single suspend biaoji the editor assigned to the project's tm0
-# Timer Event.  Not content-derivable (it is the editor's global label
-# allocator state); captured here so the assembler can reproduce the
-# project byte-for-byte.  A from-scratch writer that does not need
-# suspend/resume parity may emit 0 instead.
-PROJECT_S_BIAOJI = 0x0F71FD
+# ── Suspend-marker biaoji allocator (me/miata-dash#40) ──────────────────────
+#
+# An S/L marker pair is the editor's suspend/resume wrapper for a handler
+# whose execution can be paused mid-run (the Timer event, Slider events).
+# The 4-byte ``biaoji`` in each ``S``/``L`` marker is a **pairing key**, not a
+# byte offset: the editor's ``Makestrsbytes`` pass (appbianyi, hmitype.dll)
+# walks every ``L`` marker, looks up the ``S`` with the *same* biaoji via
+# ``GetLcCL_S``, and patches that ``L``'s payload to ``S_region_offset + 11``
+# (see :func:`patch_l_markers`).  So the biaoji's only job is to join an L to
+# its S; its absolute value never feeds a computed offset.
+#
+# Numbering rule (reverse-engineered from the editor-output corpus, NOT a
+# monotonic content counter):
+#
+#   * The **first** suspend marker a project emits ALWAYS gets the fixed
+#     editor seed ``0x0F71FD``.  Verified across every single-suspend fixture
+#     in ``tests/editor outputs/`` (source, live, 16_loop, base, save A/C/D,
+#     baud/dim/sleep/vertical, 14_char_name, 00_multi-global, …) AND as the
+#     first marker of the multi-suspend ``17_more_components`` fixture.  It is
+#     INVARIANT under structural script edits to that handler: adding a line
+#     to the Timer (``10_timer_extra_line``) keeps ``0x0F71FD`` — which is the
+#     property #40 needs (the #36 timer rework stays byte-stable here).
+#
+#   * Subsequent suspend markers (only the ``17_more_components`` Slider
+#     fixture exercises these) use a *different* allocation block:
+#     ``0x20095`` then ``0x20097`` (+2 each).  The ``0x20000``-block base is a
+#     firmware memory-map value (the markers index the device's runtime
+#     resume-state, set via ``Hmi_SetHexPos`` from the component's
+#     ``objdata_Ram`` event slot) and could NOT be reduced to a content rule
+#     from the available corpus — one editor oracle with ≥2 *Timer* suspend
+#     points (or a documented firmware memory map) is needed to pin it.
+#
+# Our compiler emits exactly ONE suspend marker (the single Timer's
+# ``codestimer``; see ``event_region_generator`` lei-51 path), so index 0 is
+# the only case it can hit — and that case is fully determined.  The
+# allocator below returns the proven seed for index 0 and refuses (rather than
+# guesses) index ≥ 1, so a hypothetical future multi-suspend project fails
+# loudly instead of emitting an unvalidated biaoji into a flashed TFT.
+
+# The editor's fixed seed for the first suspend marker.
+SUSPEND_BIAOJI_SEED = 0x0F71FD
+
+# Back-compat alias (was a captured per-project constant; now the derived
+# index-0 value, identical for every project — see allocator above).
+PROJECT_S_BIAOJI = SUSPEND_BIAOJI_SEED
+
+
+def suspend_biaoji(index: int = 0) -> int:
+    """The ``S``/``L`` pairing biaoji for the ``index``-th suspend marker
+    a project emits (in emission order).
+
+    ``index == 0`` returns the editor's fixed seed ``0x0F71FD`` (the only
+    case our single-Timer compiler reaches; verified byte-identical against
+    every editor-output fixture).  ``index >= 1`` is not content-derivable
+    from the available corpus (see the module note) — raise rather than emit
+    an unvalidated value into a TFT we flash.
+    """
+    if index == 0:
+        return SUSPEND_BIAOJI_SEED
+    raise NotImplementedError(
+        f"suspend-marker biaoji for index {index} is not derivable from the "
+        f"current corpus (only index 0 = {SUSPEND_BIAOJI_SEED:#x} is "
+        f"validated). A multi-Timer-suspend editor oracle is needed to pin "
+        f"the 0x20000-block allocation (me/miata-dash#40)."
+    )
 
 
 def _entry(payload: bytes) -> bytes:
@@ -294,6 +356,8 @@ def patch_l_markers(region: bytes, region_base: int = 0) -> bytes:
 __all__ = [
     "TERM",
     "PROJECT_S_BIAOJI",
+    "SUSPEND_BIAOJI_SEED",
+    "suspend_biaoji",
     "emit_s_marker",
     "emit_l_marker",
     "EVENT_LAYOUT",
