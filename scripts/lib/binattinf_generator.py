@@ -467,12 +467,13 @@ def build_component_binattinf(
     txt_merrylenth = None
     if lei in INLINE_TXT_BUFFER:
         inline_buf = INLINE_TXT_BUFFER[lei]
-        # A GLOBAL (vscope=1) Text stores its txt in the 20-byte global-memory
-        # record whose inline budget is 11 (not the 16 a page-frame Text has);
-        # its binattinf txt capacity / Strlenth follow that (me/miata-dash#35:
-        # global_mixed's t0 → merrylenth 11, txt_maxl 10).
+        # A GLOBAL (vscope=1) Text stores its txt in the global-memory
+        # directory record (buffer = txt_maxl+1, not floored at the 16 a
+        # page-frame Text has).  Its binattinf txt capacity follows txt_maxl+1
+        # directly (me/miata-dash#35/#37: global_mixed txt_maxl 10 → 11; lights
+        # txt_maxl 15 → 16).  Using a low floor keeps txt_maxl+1 in control.
         if lei == 116 and authored.get("vscope") == 1:
-            inline_buf = 11
+            inline_buf = 0
         txt_merrylenth = _txt_merrylenth(
             inline_buf, authored.get("txt"),
             authored.get("txt_maxl"))

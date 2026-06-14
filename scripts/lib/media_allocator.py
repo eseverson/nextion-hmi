@@ -88,14 +88,21 @@ _VSCOPE_SLOT_END = 0x2C
 # ``project_global_shift``).  A vscope=1 component pushes every page's
 # non-global region up by this much — EXCEPT the project's first global,
 # which is absorbed by the baseline prefix slot.  xfloat (59) = 0x18 = its
-# SIZEOF; Text (116) = 0x14 (its frame SIZEOF is 0x1c, but it contributes
-# only 0x14 to the shift — established from the single `global_mixed` Text
-# oracle; see #37).  Other global-capable types are unverified — fall back
-# to SIZEOF and flag.
+# SIZEOF.  A Text (116) contributes its global-memory-directory *record
+# size* — ``align4(9 + txt_maxl + 1)`` — NOT a fixed value: global_mixed
+# (txt_maxl 10) = 0x14, lights (txt_maxl 15) = 0x1c (me/miata-dash#37).
+# Other global-capable types are unverified — fall back to SIZEOF.
 _GLOBAL_SHIFT_SIZE: dict[int, int] = {
     59:  0x18,   # XFloat
-    116: 0x14,   # Text (≠ SIZEOF 0x1c; one-oracle value, see #37)
 }
+
+
+def _global_shift_contribution(c) -> int:
+    """One vscope=1 component's contribution to the project shift."""
+    if c.lei == 116:
+        from scripts.lib.header_generator import global_text_record_size
+        return global_text_record_size(c.attrs.get("txt_maxl") or 0)
+    return _GLOBAL_SHIFT_SIZE.get(c.lei, SIZEOF_OBJDATA_T1.get(c.lei, 0))
 
 
 @dataclass
@@ -147,8 +154,7 @@ def project_global_shift(pages) -> int:
                 if first:
                     first = False          # first global → absorbed, no shift
                 else:
-                    total += _GLOBAL_SHIFT_SIZE.get(
-                        c.lei, SIZEOF_OBJDATA_T1.get(c.lei, 0))
+                    total += _global_shift_contribution(c)
     return total
 
 

@@ -68,45 +68,53 @@ def vscope_record(ordinal, bco, pco, xcen, ycen) -> bytes:
     )
 
 
-# The global-scope Text record is a fixed 20 bytes; its inline txt budget is
-# ``20 - (4 head + 2 bco + 3 marker) = 11`` (so txt up to 10 chars + NUL).
-GLOBAL_TEXT_RECORD_SIZE = 20
-GLOBAL_TEXT_INLINE_BUDGET = GLOBAL_TEXT_RECORD_SIZE - (4 + 2 + 3)   # = 11
+# Fixed prefix of a global-scope Text record: res(u16) + pco(u16) + bco(u16)
+# + the 3-byte ``01 01 00`` text-slot marker = 9 bytes, then the inline txt
+# buffer of ``txt_maxl + 1`` bytes, the whole record 4-byte-aligned.
+_GLOBAL_TEXT_HEAD = 6 + 3   # res/pco/bco (6) + marker (3)
 
 
-def vscope_text_record(bco, txt) -> bytes:
+def global_text_record_size(txt_maxl) -> int:
+    """On-disk size of a global Text's directory record: ``align4(9 +
+    (txt_maxl + 1))`` — the 9-byte head/marker plus a ``txt_maxl+1`` inline
+    buffer, 4-aligned.  (global_mixed txt_maxl=10 → 20 B; lights txt_maxl=15
+    → 28 B.)"""
+    return ((_GLOBAL_TEXT_HEAD + (int(txt_maxl) + 1)) + 3) & ~3
+
+
+def vscope_text_record(bco, pco, txt, txt_maxl) -> bytes:
     """One global-scope record for a ``vscope=1`` **Text** (lei 116).
 
     Unlike the 24-byte numeric ``vscope_record``, a global Text stores its
     ``txt`` string inline in the global-memory directory — this is WHERE a
     global Text's label lives (me/miata-dash#35, located from the
-    ``global_mixed`` oracle).  Fixed 20-byte layout:
+    ``global_mixed`` oracle; the multi-Text record size + pco field pinned
+    from the ``lights`` oracle, me/miata-dash#37).  Layout:
 
-        +0  u32  0
+        +0  u16  res (0)
+        +2  u16  pco
         +4  u16  bco
         +6  3 B  ``01 01 00`` text-slot marker
-        +9  ...  ``txt`` (latin-1) + NUL
-        ...      zero pad to 20
+        +9  ...  ``txt`` (latin-1) + NUL, in a ``txt_maxl + 1`` buffer
+        ...      zero pad to align4(9 + txt_maxl + 1)
 
-    Validated byte-exact against ``global_mixed`` for a 3-char txt
-    (``00000000 ffff 010100 414243 00`` + pad).  The inline budget is 11
-    (txt ≤ 10 chars) — enough for the dash-light labels (CLT/OIL/… are 3).
-    The spill layout for a longer txt is UNVERIFIED (no oracle); the overflow
-    is refused rather than guessed.
-    """
+    Validated byte-exact against ``global_mixed`` (ABC, txt_maxl 10 → 20 B,
+    pco 0) and ``lights`` (CLT/OIL/BAT/CEL/KNK, txt_maxl 15 → 28 B, pco
+    0xffff).  ``txt`` longer than its ``txt_maxl`` buffer would spill; that
+    layout is UNVERIFIED (no oracle) and is refused rather than guessed."""
     enc = txt.encode("latin-1", "replace") if isinstance(txt, str) else b""
-    # The 20-byte size also equals this global's contribution to
-    # ``media_allocator.project_global_shift`` (Text = 0x14).
-    if len(enc) + 1 > GLOBAL_TEXT_INLINE_BUDGET:
+    buf = int(txt_maxl) + 1
+    if len(enc) + 1 > buf:
         raise NotImplementedError(
-            "global Text txt overflows the inline buffer; the spill layout in "
-            "the global-memory directory is unverified (no oracle) — #35/#37"
+            "global Text txt overflows its txt_maxl buffer; the spill layout "
+            "in the global-memory directory is unverified (no oracle) — #35/#37"
         )
+    size = global_text_record_size(txt_maxl)
     body = bytearray()
-    body += struct.pack("<IH", 0, bco & 0xFFFF)
+    body += struct.pack("<HHH", 0, pco & 0xFFFF, bco & 0xFFFF)
     body += b"\x01\x01\x00"
     body += enc + b"\x00"
-    body += b"\x00" * (GLOBAL_TEXT_RECORD_SIZE - len(body))
+    body += b"\x00" * (size - len(body))
     return bytes(body)
 
 
@@ -127,8 +135,12 @@ def build_global_dir(pages, app_allvas_qty) -> bytes:
     region1_size = _REGION1_BASE + 4 * max(0, app_allvas_qty - 3)
     instances = _vscope_instances(pages)
     # Each global page-instance contributes a record: 24 bytes for a numeric
-    # global, 20 bytes for a Text global (which carries its inline txt).
-    region1_size += sum(20 if c.lei == 116 else 24 for c in instances)
+    # global, or, for a Text global, ``align4(9 + txt_maxl + 1)`` (it carries
+    # its label inline) — 20 B for txt_maxl 10, 28 B for txt_maxl 15, etc.
+    region1_size += sum(
+        global_text_record_size(c.attrs.get("txt_maxl") or 0)
+        if c.lei == 116 else 24
+        for c in instances)
 
     region2_off = _TLV_BODY_END + region1_size
     total_size = region2_off + _REGION2_SIZE_FIELD
@@ -168,7 +180,9 @@ def build_global_dir(pages, app_allvas_qty) -> bytes:
         if c.lei == 116:
             # Global Text: inline-txt record (see vscope_text_record).
             region1 += vscope_text_record(int(a.get("bco") or 0),
-                                          a.get("txt"))
+                                          int(a.get("pco") or 0),
+                                          a.get("txt"),
+                                          int(a.get("txt_maxl") or 0))
         else:
             region1 += vscope_record(
                 ordinal,
