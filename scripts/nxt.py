@@ -14,6 +14,7 @@ Subcommands
   resize-str    Resize a string attribute in an HMI page payload (HMI-first).
   hotspot       Add a page-navigation Hotspot to an HMI page by cloning m0
                 (HMI-first; the safe structural-change path).
+  remove-component  Remove a component by name from an HMI page (HMI-first).
   list-tft      List every component in a TFT with inferred names.
   extract-pages Extract resource entries / RGB565 images from a TFT.
   preview       Render HMI pages to PNG previews.
@@ -144,6 +145,14 @@ def _cmd_hotspot(args: argparse.Namespace) -> int:
     sys.argv = ["nxt hotspot", args.input, "-o", args.output,
                 "--page", str(args.page),
                 "--target-page", str(args.target_page)]
+    return _main()
+
+
+def _cmd_remove_component(args: argparse.Namespace) -> int:
+    from scripts.tools.remove_component_hmi import main as _main
+    sys.argv = ["nxt remove-component", args.input, "-o", args.output,
+                "--page", str(args.page),
+                "--name", args.name]
     return _main()
 
 
@@ -341,6 +350,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--target-page", type=int, required=True,
                    help="device page id the new hotspot navigates to")
 
+    # ---- remove-component --------------------------------------------------
+    p = sub.add_parser("remove-component",
+                       help="Remove a component by name from an HMI page "
+                            "(HMI-first; reseals CRC and directory).")
+    p.add_argument("input", help="source .HMI")
+    p.add_argument("-o", "--output", required=True)
+    p.add_argument("--page", type=int, required=True,
+                   help=".pa stem of the page (not the device page id)")
+    p.add_argument("--name", required=True,
+                   help="component objname to remove (e.g. 'b0')")
+
     # ---- list-tft ----------------------------------------------------------
     p = sub.add_parser("list-tft",
                        help="List every component in a TFT with inferred names.")
@@ -442,6 +462,7 @@ _DISPATCH = {
     "patch-tft":      _cmd_patch_tft,
     "resize-str":     _cmd_resize_str,
     "hotspot":        _cmd_hotspot,
+    "remove-component": _cmd_remove_component,
     "list-tft":       _cmd_list_tft,
     "extract-pages":  _cmd_extract_pages,
     "preview":        _cmd_preview,
