@@ -39,11 +39,12 @@ internal flash image; either copy is authoritative on disk.
 +0x10   u32   start             # absolute file offset of the data blob
 +0x14   u32   size              # length of the data blob in bytes
 +0x18   u8    deleted           # 0 = live, 1 = tombstoned
-+0x19   u8    tail0             # for pages/Program.s: (size>>8)&0xff
-+0x1A   u8    tail1             # for pages/Program.s: (size>>16)&0xff
-+0x1B   u8    tail2             # for pages/Program.s: (size>>24)&0xff
-                                # For fonts and main.HMI these three bytes
-                                # carry different (un-decoded) data.
++0x19   u8    tail0             # purpose unresolved; varies per-save with no
++0x1A   u8    tail1             # known formula across any entry type (pages,
++0x1B   u8    tail2             # Program.s, fonts, main.HMI). Most are zero.
+                                # See H2 in open questions. Earlier belief that
+                                # pages/Program.s store (size>>N)&0xff here is
+                                # empirically false.
 ```
 
 Stale names: when an entry is tombstoned (`deleted=1`), `name` is not
@@ -273,16 +274,26 @@ than the compiled page itself.
 
 ## Open structural questions
 
-- **H2 (directory tail bytes)**: 3 trailing bytes of font and main.HMI
-  entries don't follow the `size>>8` pattern that pages and Program.s
-  use. Possibly a content hash, timestamp, or wider field overlap.
+- **H2 (directory tail bytes)**: 3 trailing bytes at +0x19..+0x1b of every
+  entry type (pages, Program.s, fonts, main.HMI). No formula found —
+  the earlier belief that pages/Program.s store `(size>>N)&0xff` here is
+  wrong; empirically these bytes vary per-save and are mostly zero. Could
+  be uninitialized buffer bytes, a save-counter stamp, or something else.
 - **H3 (0x380000 sentinel)**: purpose of the lone `0xFFFFFFFF` at file
   offset `0x380000`. Hypothesis: marker for a 512KB-aligned filesystem
   sector. Unverified.
 - **H4 (main.HMI bytes 0x0C..0x60)**: per-display config block; blocked
   on access to a second hardware model.
-- **H5 (Program.s / .zi / main.HMI CRCs)**: whether the same chained
-  CRC family applies, just with different segment chains.
+- **H5 (main.HMI CRC algorithm)**: `Program.s` blobs begin with raw
+  ASCII (`//The following …`) — no CRC header. `.zi` font blobs have a
+  constant leading u32 `0x0a00ff04` (magic, not CRC). Only `main.HMI`
+  has a genuine per-save CRC at blob[0:4], but the algorithm is
+  unresolved. It is computed by achmi.dll subcommand `0x25`
+  (`HmiSafeWriteHMIFileSafe`), which is distinct from page CRC
+  subcommand `0x27`. Six known (body\_crc, stored\_crc) data points
+  all fail standard `crc32_bytewise` variants including body-only sweep,
+  page-style micro-segments, and `crc32_T`. Needs static analysis of
+  subcommand `0x25` to resolve.
 - **H7 (PageHeader+0x15 / +0x17)**: known to be page-format magic
   (`0x4f` and `0x21` respectively, per the page CRC pre-patch). Why
   they're stored per-page rather than once per file is unclear.

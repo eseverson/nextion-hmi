@@ -41,7 +41,7 @@ exact reproduction steps.
 | 06| bco_magenta           | `[~]`  | `bco` location pinpointed in HMI (`0x720f6a`, 1730 bytes into the page payload). TFT-side location not isolated (`1f f8` is too common in the body).                |
 | 07| add_hotspot           | `[x]`  | Adding a Hotspot grows the page payload by **+516 bytes**. Every component carries a fixed-size attribute record + per-event slot allocation. |
 | 08| delete_component      | `[x]`  | Component deletion does **not** shrink files. Old payload is tombstoned and a new payload is appended; the deleted component's slot is reformatted rather than reclaimed. Confirms append-only journal. |
-| 09| program_s_page1       | `[ ]`  | Fixture captured. Diff not yet analysed — should reveal whether the `Program.s` blob has its own CRC family (H5).            |
+| 09| program_s_page1       | `[~]`  | H5 partial close: `Program.s` blob is plain ASCII (no CRC header); `.zi` fonts have constant magic `0x0a00ff04` (not a CRC). `main.HMI` blob[0:4] is a real per-save CRC but the algorithm is unresolved — subcommand 0x25, not 0x27. Also disproved the `(size>>8)&0xff` tail-byte formula in format-hmi.md (universally false). Remaining: subcommand 0x25 static analysis. |
 | 10| timer_extra_line      | `[x]`  | One more bytecode-encoding probe. Superseded by 16 for control-flow opcodes; this one stays as a regression sample.          |
 | 11| add_page              | `[~]`  | TFT grows by **+1180 bytes** per empty page; HMI grows by a full sector chunk (+66168 bytes). New-page id allocation pattern (`len(pages)` vs lowest-free) needs the directory diff. |
 | 13| save_six_times        | `[x]`  | 6 consecutive no-change saves → byte-identical TFTs. HMI grows monotonically for 5 saves; one tombstone reclaimed on save 6 (compaction trigger still fuzzy). |
@@ -171,32 +171,28 @@ appends or rewrites on add-page.
 
 **Answers**: H13, H14.
 
-### Page CRC family for `Program.s` and `*.zi` (closes H5)
+### main.HMI blob CRC algorithm (closes H5 remainder)
 
-**Folder**: `tests/editor outputs/22_program_s_byte/`
+**Folder**: `tests/editor outputs/22_main_hmi_crc/`
 
-**Goal**: Verify whether `Program.s` and `*.zi` blobs use the same
-five-segment chained CRC as `*.pa` (just with a different segment
-chain). The leading u32 of each blob has the shape of a CRC.
+**Goal**: Identify the CRC algorithm used for `main.HMI` blob[0:4].
+`Program.s` and `.zi` leading u32s are confirmed non-CRC (plain ASCII
+and fixed magic respectively). Only `main.HMI` has a content-dependent
+CRC, computed by achmi.dll subcommand `0x25` (`HmiSafeWriteHMIFileSafe`).
+
+**Prior work (exp 09 analysis)**: Six known (body\_crc, stored\_crc) pairs
+collected. Standard `crc32_bytewise` variants including body-only sweep,
+page-style micro-segments, crc32_T, and numerous seeding/masking
+combinations all fail. The algorithm is not the page CRC.
 
 **Steps**:
-1. Start from baseline.
-2. Change one ASCII character inside `Program.s` (e.g. `page 0` →
-   `page 1`). Save as `iter_p1.{HMI,tft}`.
-3. Restore. Change one byte inside `0.zi`'s glyph data via the font
-   editor (or via an external hex edit + re-import if the editor
-   allows). Save as `iter_z1.{HMI,tft}`.
+1. Static disassembly of achmi.dll subcommand `0x25` to find the CRC
+   routine and segment chain it uses.
+2. Alternatively, capture two saves that differ by exactly one known
+   byte in `main.HMI` and enumerate segment chains algebraically.
 
-**Expected diff**:
-- For each iteration, the leading u32 of the affected blob changes;
-  everything else is byte-for-byte unchanged except for one inner
-  byte.
-- Then enumerate plausible chain variations of the page CRC (no
-  micro-CRCs / different segment counts / etc.) against the data and
-  find which produces the new leading u32.
-
-**Answers**: H5. Likely small modification of
-[`scripts/lib/page_crc.py`](../scripts/lib/page_crc.py).
+**Answers**: H5 (main.HMI CRC algorithm). Unblocks the `main.HMI`
+writer in issue #1.
 
 ### Stable region decode (advances H2 trailing region) — RESOLVED
 
