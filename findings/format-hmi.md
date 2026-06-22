@@ -284,16 +284,22 @@ than the compiled page itself.
   sector. Unverified.
 - **H4 (main.HMI bytes 0x0C..0x60)**: per-display config block; blocked
   on access to a second hardware model.
-- **H5 (main.HMI CRC algorithm)**: `Program.s` blobs begin with raw
-  ASCII (`//The following …`) — no CRC header. `.zi` font blobs have a
-  constant leading u32 `0x0a00ff04` (magic, not CRC). Only `main.HMI`
-  has a genuine per-save CRC at blob[0:4], but the algorithm is
-  unresolved. It is computed by achmi.dll subcommand `0x25`
-  (`HmiSafeWriteHMIFileSafe`), which is distinct from page CRC
-  subcommand `0x27`. Six known (body\_crc, stored\_crc) data points
-  all fail standard `crc32_bytewise` variants including body-only sweep,
-  page-style micro-segments, and `crc32_T`. Needs static analysis of
-  subcommand `0x25` to resolve.
+- **H5 (main.HMI CRC algorithm)**: **CLOSED** — same
+  `crc32_bytewise` family as page blobs, five-segment chain with
+  different re-mix offsets:
+
+      crc = CRC32(0xFFFFFFFF, blob[4:])      # body
+      crc = CRC32(crc, blob[0x10:0x14])      # Modelcrc
+      crc = CRC32(crc, blob[0x04:0x08])      # Datasize
+      crc = CRC32(crc, blob[0x0a:0x0b])      # filever (0x21)
+      crc = CRC32(crc, blob[0x0e:0x0f])      # hmiffid (0x4f)
+
+  Total re-mix = 10 bytes (same as page chain 4+4+1+1).  Found via
+  GF(2)^32 linearity argument (total-remix-length must satisfy
+  `T^N · Δfwd = Δstored`; N=10 is the unique solution) then exhaustive
+  4+4+1+1 segment search.  Verified byte-exact against four distinct
+  stored CRCs (guidire=0/1, qty=1/6/7, upver1=0x43/0x44).
+  Implemented in `scripts/lib/main_hmi.py`.
 - **H7 (PageHeader+0x15 / +0x17)**: known to be page-format magic
   (`0x4f` and `0x21` respectively, per the page CRC pre-patch). Why
   they're stored per-page rather than once per file is unclear.
