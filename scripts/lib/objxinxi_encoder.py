@@ -80,11 +80,24 @@ TYPE_FLAG: dict[int, int] = {
     98:  0x37,  # Button
     51:  0x27,  # Timer
     52:  0x07,  # Variable
+    # me/miata-dash#38 — remaining classes (verified from the +3 byte of the
+    # 03_untested-components / 17_more_components objxinxi entries).
+    0:   0x37,  # Curve / Waveform (visible)
+    5:   0x27,  # Touchcap (non-visual touch zone, like Timer)
+    53:  0x37,  # Button_T
+    54:  0x37,  # Number
+    55:  0x37,  # GText
+    56:  0x37,  # Checkbox
+    57:  0x37,  # Radio
+    58:  0x37,  # Qrcode
+    112: 0x37,  # Pic / Picture
+    113: 0x37,  # Picc / crop-Picture
+    122: 0x37,  # Zhizhen / Gauge
 }
 
-# Geometry default for non-visual components (Timer / Variable): the
-# editor stores a 1×1 box at the origin.  endx/endy clamp to 0.
-NONVISUAL_LEIS = frozenset({51, 52})
+# Geometry default for non-visual components (Timer / Variable / Touchcap):
+# the editor stores a 1×1 box at the origin.  endx/endy clamp to 0.
+NONVISUAL_LEIS = frozenset({51, 52, 5})
 
 SENTINEL = 0xFFFFFFFF
 

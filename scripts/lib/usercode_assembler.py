@@ -216,6 +216,32 @@ EVENT_LAYOUT: dict[int, tuple] = {
     51:  _ops(T, N("timer"), C(4), T, T, T, T, T, T, T, T),
     # Variable (52): no event registration, contributes nothing.
     52:  _ops(),
+    # me/miata-dash#38 — whole-component generation for the remaining
+    # classes.  The slot layout is decoded byte-for-byte from the
+    # 03_untested-components + 17_more_components fixture event regions
+    # (collapsing each terminator-delimited chain run to a single slot op):
+    #
+    #   Number(54)/Pic(112)/Gauge(122)/Qrcode(58)/Picc(113)/GText(55)
+    #                : C0 T C1 T down T up T   (== XFloat — init + auto-fill)
+    #   Checkbox(56)/Radio(57)/Button_T(53)
+    #                : C0 T C1 T down C2 T up T   (init + auto-fill + a
+    #                                              press handler in slot 2)
+    #   Curve(0)     : T C1 T down T up T   (no init; auto-fill in slot 1,
+    #                                        attstr points at slot-1 length
+    #                                        prefix = slot1_off - 4)
+    #   Touchcap(5)  : T down T up T   (no init, no auto-fill — only the
+    #                                   touch-event name strings)
+    54:  _ops(C(0), T, C(1), T, N("down"), T, N("up"), T),
+    112: _ops(C(0), T, C(1), T, N("down"), T, N("up"), T),
+    122: _ops(C(0), T, C(1), T, N("down"), T, N("up"), T),
+    58:  _ops(C(0), T, C(1), T, N("down"), T, N("up"), T),
+    113: _ops(C(0), T, C(1), T, N("down"), T, N("up"), T),
+    55:  _ops(C(0), T, C(1), T, N("down"), T, N("up"), T),
+    56:  _ops(C(0), T, C(1), T, N("down"), C(2), T, N("up"), T),
+    57:  _ops(C(0), T, C(1), T, N("down"), C(2), T, N("up"), T),
+    53:  _ops(C(0), T, C(1), T, N("down"), C(2), T, N("up"), T),
+    0:   _ops(T, C(1), T, N("down"), T, N("up"), T),
+    5:   _ops(T, N("down"), T, N("up"), T),
 }
 
 

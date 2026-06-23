@@ -38,6 +38,9 @@ class CompilerProfile:
     timerset_opcode: bytes = bytes.fromhex("092308")
     """The 3-byte page-load ``timerset`` opcode (``09 23 08`` C / ``09 24 08``
     D)."""
+    nstr_opcode: bytes = bytes.fromhex("091304")
+    """The 3-byte Number ``nstr`` draw opcode (``09 13 04`` C / ``09 15 04``
+    D); me/miata-dash#38 byte-verified against the 'D'-build Number block."""
     sysvar_overrides: dict = field(default_factory=dict)
     """``{name: (size_class, index)}`` overrides for shifted system vars."""
     frame_prefix: int = 0x10
@@ -57,6 +60,7 @@ _VERSION_LETTER_CONST = {
         "setbrush_opcode": bytes.fromhex("091c08"),
         "doevents_opcode": bytes.fromhex("092208"),
         "timerset_opcode": bytes.fromhex("092308"),
+        "nstr_opcode": bytes.fromhex("091304"),
         "sysvar_overrides": {},
         "frame_prefix": 0x10,
     },
@@ -65,6 +69,7 @@ _VERSION_LETTER_CONST = {
         "setbrush_opcode": bytes.fromhex("091d08"),
         "doevents_opcode": bytes.fromhex("092308"),
         "timerset_opcode": bytes.fromhex("092408"),
+        "nstr_opcode": bytes.fromhex("091504"),
         # Newer build inserted sysvars, shifting size-4 indices: `baud`
         # 0x0e→0x1a, `dims` 0x14→0x21.  Override the ones the projects'
         # bytecode actually references.
@@ -132,6 +137,7 @@ def profile_for(tft_bytes: bytes, *,
         setbrush_opcode=const["setbrush_opcode"],
         doevents_opcode=const.get("doevents_opcode", bytes.fromhex("092208")),
         timerset_opcode=const.get("timerset_opcode", bytes.fromhex("092308")),
+        nstr_opcode=const.get("nstr_opcode", bytes.fromhex("091304")),
         sysvar_overrides=dict(const["sysvar_overrides"]),
         frame_prefix=const.get("frame_prefix", 0x10),
         brush_state=dict(brush_state or {}),

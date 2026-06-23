@@ -230,10 +230,17 @@ def _fstr() -> tuple:
 
 
 def _nstr() -> tuple:
+    # me/miata-dash#38: byte-verified against the 'D'-build Number block
+    # (03_untested-components / 17_more_components n0): the Number draw is
+    # ``nstr LOAD(val), LOAD(lenth), LOAD(format)`` — three consecutive
+    # records (val/lenth/format), with a DISTINCT opcode head (``09 15 04``
+    # in the nxt-1.67.1 / 'D' firmware, supplied via the ``nstr``
+    # opcode_override; the old nxt-1.65.1 table head ``09 13 04`` is for a
+    # different build).
     return ('nstr', [
         ('attr', 'val'), ('lit', ','),
-        ('coord', 'lenth'), ('lit', ','),
-        ('coord', 'format'),
+        ('attr', 'lenth'), ('lit', ','),
+        ('attr', 'format'),
     ])
 
 

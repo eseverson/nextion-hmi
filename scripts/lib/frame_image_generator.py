@@ -104,7 +104,147 @@ PARAM_STRUCTS: dict[int, list[tuple[str, int, str | None, int]]] = {
     52: [  # Vari_PARAM_tk (4 B): just the int32 val (SIZEOF[52] = 4)
         ("val", 4, "val", 0),
     ],
+    # --- me/miata-dash#38: remaining component classes ---------------------
+    # Field layouts derived from ATTPOSUP_TABLE_T1 + byte-verified against the
+    # 03_untested-components / 17_more_components frame images.  As with
+    # XFloat, ``borderc`` / ``borderw`` are NOT serialized into the frame
+    # (they stay 0); colour/picid fields alias ``bco``/``bco2`` (the active
+    # background id slot).
+    54: [  # Number_PARAM (24 B) — byte-for-byte the Xfloat_PARAM layout
+        ("sta", 1, "sta", 0),
+        ("style", 1, "style", 0),
+        ("borderc", 2, None, 0),   # not serialized
+        ("borderw", 1, None, 0),   # not serialized
+        ("font", 1, "font", 0),
+        ("pic", 2, "bco", 0xFFFF),
+        ("pco", 2, "pco", 0xFFFF),
+        ("xcen", 1, "xcen", 0),
+        ("ycen", 1, "ycen", 0),
+        ("val", 4, "val", 0),
+        ("vvs0", 1, "vvs0", 0),
+        ("vvs1", 1, "vvs1", 0),
+        ("res0", 2, None, 0),
+        ("isbr", 1, "isbr", 0),
+        ("spax", 1, "spax", 0),
+        ("spay", 1, "spay", 0),
+        ("res1", 1, None, 0),
+    ],
+    112: [  # Pic_PARAM (4 B) — single Picid + reserved
+        ("pic", 2, "pic", 0xFFFF),
+        ("res0", 2, None, 0),
+    ],
+    113: [  # Picc_PARAM (8 B) — crop-Picid + reserved
+        ("picc", 2, "picc", 0xFFFF),
+        ("res0", 6, None, 0),
+    ],
+    122: [  # Zhizhen_PARAM (24 B) — gauge/pointer
+        ("sta", 1, "sta", 0),
+        ("res0", 1, None, 0),
+        ("bco", 2, "bco", 0xFFFF),
+        ("val", 2, "val", 0),
+        ("format", 2, "format", 0),
+        ("up", 2, "up", 0),
+        ("down", 2, "down", 0),
+        ("left", 2, "left", 0),
+        ("pco", 2, "pco", 0xFFFF),
+        ("pco2", 2, "pco2", 0xFFFF),
+        ("hig", 1, "hig", 0),
+        ("res1", 1, None, 0),    # @19 reserved (wid is at +20, not +19)
+        ("wid", 1, "wid", 0),
+        ("vvs0", 1, "vvs0", 0),
+        ("vvs1", 1, "vvs1", 0),
+        ("vvs2", 1, "vvs2", 0),
+    ],
+    56: [  # CheckBox_PARAM (12 B)
+        ("style", 1, "style", 0),
+        ("borderw", 1, None, 0),   # not serialized
+        ("borderc", 2, None, 0),   # not serialized
+        ("bco", 2, "bco", 0xFFFF),
+        ("pco", 2, "pco", 0xFFFF),
+        ("val", 2, "val", 0),
+        ("res0", 2, None, 0),
+    ],
+    57: [  # Radio_PARAM (8 B)
+        ("bco", 2, "bco", 0xFFFF),
+        ("pco", 2, "pco", 0xFFFF),
+        ("val", 2, "val", 0),
+        ("res0", 2, None, 0),
+    ],
+    5: [  # Touchcap_PARAM (4 B) — single u32 val
+        ("val", 4, "val", 0),
+    ],
+    # --- spill classes (Qrcode/GText/Curve) -------------------------------
+    # Their in-block struct carries a POINTER (``*_ptr`` fields below) into a
+    # per-page Sstr/molloc spill region that follows the frame blocks.  Those
+    # pointer values are NOT struct-local — they depend on the spill layout —
+    # so the field is declared as a reserved 0 here and BACK-PATCHED by
+    # :func:`build_frame_image` once the spill base is known
+    # (``ptr = spill_frame_offset + frame_prefix``).  The remaining scalar
+    # fields are byte-verified against the untested / 17_more_components qr0 /
+    # g0 / s0 frame blocks.
+    58: [  # Qrcode_PARAM (16 B)
+        ("sta", 1, "sta", 0),
+        ("dis", 1, "dis", 0),
+        ("bco", 2, "bco", 0xFFFF),
+        ("pco", 2, "pco", 0xFFFF),
+        ("pic", 2, None, 0),         # not serialized (reserved 0)
+        ("txt_maxl", 2, "txt_maxl", 0),
+        ("res0", 2, None, 0),
+        ("txt_ptr", 4, None, 0),     # back-patched: spill pointer
+    ],
+    55: [  # GText_PARAM (36 B)
+        ("sta", 1, "sta", 0),
+        ("style", 1, "style", 0),
+        ("borderc", 2, None, 0),     # not serialized
+        ("borderw", 1, None, 0),     # not serialized
+        ("font", 1, "font", 0),
+        ("bco", 2, "bco", 0xFFFF),
+        ("pco", 2, "pco", 0xFFFF),
+        ("xcen", 1, "xcen", 0),
+        ("ycen", 1, "ycen", 0),
+        ("dir", 1, "dir", 0),
+        ("dis", 1, "dis", 0),
+        ("tim", 2, "tim", 0),
+        ("en", 2, "en", 0),
+        ("txt_maxl", 2, "txt_maxl", 0),
+        ("txt_ptr", 4, None, 0),     # @20 back-patched: spill pointer
+        ("isbr", 1, "isbr", 0),
+        ("spax", 1, "spax", 0),
+        ("spay", 1, "spay", 0),
+        ("res1", 1, None, 0),
+        ("vvs0", 2, "vvs0", 0),
+        ("vvs1", 2, "vvs1", 0),
+        ("vvs2", 2, "vvs2", 0),
+        ("vvs3", 2, "vvs3", 0),
+    ],
+    0: [  # Curve_PARAM (36 B) — Waveform.  pco1..pco3 are NOT serialized
+        # (only pco0 is); molloc_s / molloc are spill pointers (back-patched).
+        ("sta", 1, "sta", 0),
+        ("dir", 1, "dir", 0),
+        ("ch", 2, "ch", 0),
+        ("bco", 2, "bco", 0xFFFF),
+        ("gdc", 2, "gdc", 0xFFFF),
+        ("gdw", 1, "gdw", 0),
+        ("gdh", 1, "gdh", 0),
+        ("objWid", 2, "objWid", 0),
+        ("objHig", 2, "objHig", 0),
+        ("pco0", 2, "pco0", 0),
+        ("pco1", 2, None, 0),        # not serialized
+        ("pco2", 2, None, 0),        # not serialized
+        ("pco3", 2, None, 0),        # not serialized
+        ("inittrue", 2, None, 0),
+        ("dis", 4, "dis", 0),
+        ("molloc_s", 4, None, 0),    # @28 back-patched: spill buffer pointer
+        ("molloc", 4, None, 0),      # @32 back-patched: spill buffer pointer
+    ],
 }
+
+# Spill-class pointer fields: lei -> [(field_name, attposup_of_the_attr_it
+# points_to)].  Used by :func:`build_frame_image` to back-patch the in-block
+# pointer once the per-page spill region is laid out.  (See SPILL note in
+# PARAM_STRUCTS above.)  These three classes store a Sstr (txt) and/or a
+# molloc (curve channel) buffer in the spill region after the frame blocks.
+SPILL_CLASSES = frozenset({58, 55, 0})
 
 # Types whose frame block is the *_PARAM_tk packed layout + an inline txt
 # buffer (Text/Button): (tk_fields, inline_buffer_bytes).
@@ -119,6 +259,20 @@ PARAM_TK_STRUCTS: dict[int, tuple[list[tuple[str, int, str | None, int]], int]] 
         ("pw", 1, "pw", 0),
     ], 16),
     98: ([  # Button_PARAM_tk (13 B) + 11-byte txt buffer
+        ("font", 1, "font", 0),
+        ("val", 1, "val", 0),
+        ("pic", 2, "bco", 0xFFFF),
+        ("pic2", 2, "bco2", 0xFFFF),
+        ("pco", 2, "pco", 0xFFFF),
+        ("pco2", 2, "pco2", 0xFFFF),
+        ("xcen", 1, "xcen", 0),
+        ("ycen", 1, "ycen", 0),
+        ("isbr", 1, "isbr", 0),
+    ], 11),
+    # me/miata-dash#38 — Button_T (touch Button) uses the identical
+    # Button_PARAM_tk layout (13 packed fields + an 11-byte inline txt
+    # buffer); byte-verified against 03_untested-components/untested.tft bt0.
+    53: ([
         ("font", 1, "font", 0),
         ("val", 1, "val", 0),
         ("pic", 2, "bco", 0xFFFF),

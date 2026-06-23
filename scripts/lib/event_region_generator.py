@@ -48,9 +48,13 @@ SETBRUSH_OVERRIDE = {"setbrush": _DEFAULT_SETBRUSH_OPCODE}
 
 def _setbrush_override(profile):
     """The ``encode_init_block`` opcode override for this profile's
-    ``setbrush`` head (defaulting to the source-fixture opcode)."""
+    editor-version-dependent opcode heads (``setbrush`` and the Number
+    ``nstr`` draw), defaulting to the source-fixture opcodes."""
     head = profile.setbrush_opcode if profile else _DEFAULT_SETBRUSH_OPCODE
-    return {"setbrush": head}
+    ov = {"setbrush": head}
+    if profile is not None:
+        ov["nstr"] = profile.nstr_opcode
+    return ov
 
 # Init-template attribute name → the attstr-table name that actually holds
 # its record (F-series pic/picc/bco aliasing).
@@ -71,7 +75,13 @@ PAGE_OPCODE = bytes.fromhex("090b04")
 REF_OPCODE = bytes.fromhex("090304")
 
 # Component classes that participate in overlap detection (have a box).
-_VISUAL_LEIS = frozenset({59, 116, 106, 109, 1, 98})
+# me/miata-dash#38 adds the remaining visual classes: Curve(0), Number(54),
+# GText(55), CheckBox(56), Radio(57), Qrcode(58), Pic(112), Picc(113),
+# Zhizhen/Gauge(122).  Touchcap(5) is non-visual (no box) and is excluded.
+_VISUAL_LEIS = frozenset({
+    59, 116, 106, 109, 1, 98,
+    0, 53, 54, 55, 56, 57, 58, 112, 113, 122,
+})
 
 
 def _box(a):
