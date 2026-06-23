@@ -100,6 +100,79 @@ appinf1 fields, plus a 3-byte `0xff` alignment gap between the objxinxi
 table and the trailing CRC (template padding — the source fixture has none).
 
 
+## ✅ Whole-component generation — remaining classes (me/miata-dash#38, branch `component-classes`)
+
+The compiler now generates **every component class that appears in a real
+editor fixture**, not just the 9 in the dash project.  Verified block-for-
+block byte-exact against the two version-'D' fixtures (`tests/sim/
+test_component_classes.py`, +56 tests; total 419):
+
+| lei | class      | objxinxi | event stream | frame block | binattinf |
+|-----|------------|----------|--------------|-------------|-----------|
+| 0   | Curve      | ✅       | ✅           | in-block ✅ / spill ⚠ | ✅ |
+| 5   | Touchcap   | ✅       | ✅           | ✅          | ✅        |
+| 53  | Button_T   | ✅       | ✅           | ✅          | ✅        |
+| 54  | Number     | ✅       | ✅           | ✅          | ✅        |
+| 55  | GText      | ✅       | ✅ (scratch) | in-block ✅ / spill ⚠ | ✅ |
+| 56  | Checkbox   | ✅       | ✅           | ✅          | ✅        |
+| 57  | Radio      | ✅       | ✅           | ✅          | ✅        |
+| 58  | Qrcode     | ✅       | ✅           | in-block ✅ / spill ⚠ | ✅ |
+| 112 | Pic        | ✅       | ✅           | ✅          | ✅        |
+| 113 | Picc       | ✅       | ✅           | ✅          | ✅        |
+| 122 | Zhizhen    | ✅       | ✅           | ✅          | ✅        |
+
+All VERIFIED against a real fixture (no IL-only / unverified claims for
+these — every class is exercised by `03_untested-components` and/or
+`17_more_components`).  Pieces added:
+
+- **EVENT_LAYOUT** (`usercode_assembler`) + **objxinxi TYPE_FLAG /
+  NONVISUAL_LEIS** (`objxinxi_encoder`) for all 11 — decoded byte-for-byte
+  from the fixture event regions / objxinxi entries.
+- **frame `<Kind>_PARAM` structs** (`frame_image_generator`): Number ==
+  Xfloat, Button_T == Button tk; Pic/Picc/Zhizhen/Checkbox/Radio/Touchcap
+  transcribed from ATTPOSUP + verified.
+- **init bytecode**: Number `nstr` opcode `09 15 04` (profile.nstr_opcode);
+  Picc `xpic` with literal vvs offsets; **Zhizhen gauge** `09 0a 08`
+  (`_encode_zhizhen_init`, sibling-offset LOADs for format/pco2/hig);
+  Checkbox/Radio/Button_T **slot-2 toggle handler** (`_toggle_down_chain`);
+  **GText scroll** blocks (`09 24 08` + `4c 20 03`).
+- `_VISUAL_LEIS` extended so the overlap cross-redraw refs cover them.
+- Touchcap binattinf (single UU8 `val`).
+
+**STRICT round-trip proof:** compiling the clean matched pair
+`untested.HMI` reproduces the ENTIRE usercode region byte-for-byte up to
+the page-3 frame image (`test_untested_usercode_byte_exact_up_to_spill`).
+
+### ⚠ The one residual gap — the frame Sstr/molloc **spill region**
+
+Qrcode/GText/Curve store their `txt` (Sstr) / curve-channel (`molloc`)
+buffers in a per-page **spill region** appended after the frame blocks
+(past `medatapos`).  The in-block struct fields are byte-exact; the
+back-patched spill *pointer* + the spill region itself are **NOT
+reproduced byte-exact**, because the region's per-string framing carries
+non-content-derivable editor draw-brush scratch:
+
+- a `de ff` sentinel + the `0x2946` back-colour (the same scratch captured
+  as `PROJECT_BRUSH_STATE`) precede a spilled GText string;
+- the `09 24 08` scroll **step literal** differs between two saves of an
+  *identical* GText (11 in `untested`, 2 in `17_more`) — pure save-time
+  scratch;
+- the `4c 20 03` motion-jump **label addr** likewise differs per save.
+
+So the whole-file round-trip for `untested.tft` / `17.tft` is NOT byte-
+identical (the GText scroll scratch IS recovered from the reference into
+`profile.gtext_scroll`, making the *event stream* byte-exact; the *frame*
+spill scratch is not yet captured).  Fully reproducing the spill region
+would mean reversing the editor's `mollocmemory_add` two-pass allocator
+*and* capturing the per-save brush scratch — deferred; no Nextion editor is
+available to mint a controlled fixture.  Tracked under "spill region" here
+and item 2 §"Allocator integration with the page-level writer".
+
+(`17_more_components` also has **2 stale page-3 components** — q0/bt0 —
+whose `.HMI` geometry postdates the `.tft` compile, so that TFT is not
+their HMI's output; the test detects and skips them.)
+
+
 Forward-looking items only. Tools/findings already delivered are
 documented elsewhere; the most relevant cross-references:
 
