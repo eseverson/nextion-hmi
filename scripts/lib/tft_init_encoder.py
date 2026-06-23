@@ -1015,11 +1015,11 @@ def _encode_zhizhen_init(
 
     val = attr_addr("val")
     pco = attr_addr("pco")
-    fill = (fill_head + b"0,0," + str(w).encode() + b","
-            + str(h).encode() + b"," + _load_op(attr_addr("bco")))
+    fill = (fill_head + f"{x},{y},{w},{h},".encode("ascii")
+            + _load_op(attr_addr("bco")))
     gauge = (z_head
-             + str(w).encode() + b"/2+0,"
-             + str(h).encode() + b"/2+0,"
+             + f"{w}/2+{x},".encode("ascii")
+             + f"{h}/2+{y},".encode("ascii")
              + str(w).encode() + b"/2,"
              + _load_op(val) + b"+" + _load_op(val + 1) + b","   # val + format
              + _load_op(attr_addr("wid")) + b","
