@@ -204,6 +204,10 @@ DATAFROM_ATTRS: dict[int, list[DatafromAttr]] = {
     52: [  # Variable
         DatafromAttr("val", 0, "SS32", -2147483648, 2147483647, False),
     ],
+    5: [  # Touchcap — single UU8 `val` (maxval 0xffff, change=True;
+        # byte-verified vs the 17_more_components tc0 record).
+        DatafromAttr("val", 0, "UU8", 0, 65535, True),
+    ],
     # --- untested.tft error-page types (me/miata-dash#38) ----------------
     112: [  # Picture — single Picid
         DatafromAttr("pic", 0, "Picid", 0, -1, False),
