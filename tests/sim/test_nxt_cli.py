@@ -41,6 +41,7 @@ def test_help():
     assert "inspect-hmi" in r.stdout
     assert "patch-tft" in r.stdout
     assert "hotspot" in r.stdout
+    assert "tombstones" in r.stdout
 
 
 def test_no_args_prints_help():
@@ -67,6 +68,47 @@ def test_inspect_hmi_json():
 def test_inspect_tft_text():
     r = _run("inspect-tft", str(MINIMAL_TFT))
     assert "resolution" in r.stdout or "magic" in r.stdout
+
+
+# ---------------------------------------------------------------------------
+# tombstones
+# ---------------------------------------------------------------------------
+
+_SAVE_A = OLD / "save A.HMI"
+
+
+def test_tombstones_list():
+    if not _SAVE_A.exists():
+        pytest.skip("fixture missing")
+    r = _run("tombstones", str(_SAVE_A), "--list")
+    assert "tombstoned entries" in r.stdout
+    assert "IDENTICAL" in r.stdout  # backup directory check
+    assert "0.pa" in r.stdout
+
+
+def test_tombstones_diff():
+    if not _SAVE_A.exists():
+        pytest.skip("fixture missing")
+    r = _run("tombstones", str(_SAVE_A), "--diff", "0.pa")
+    assert "differing bytes" in r.stdout
+
+
+def test_tombstones_extract(tmp_path):
+    if not _SAVE_A.exists():
+        pytest.skip("fixture missing")
+    out = tmp_path / "old_0.pa"
+    r = _run("tombstones", str(_SAVE_A), "--extract", "0.pa", "0", "-o", str(out))
+    assert out.exists()
+    assert out.stat().st_size == 22123
+    assert "extracted" in r.stdout
+
+
+def test_tombstones_requires_mode():
+    if not _SAVE_A.exists():
+        pytest.skip("fixture missing")
+    # no --list/--extract/--diff -> argparse error
+    r = _run("tombstones", str(_SAVE_A), expect_fail=True)
+    assert r.returncode != 0
 
 
 def test_inspect_tft_json():

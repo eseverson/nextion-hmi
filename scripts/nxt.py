@@ -5,6 +5,8 @@ Subcommands
 -----------
   inspect-hmi   Structured dump of an HMI file (pages, components, fonts).
   inspect-tft   Structured dump of a TFT file (H1/H2 header fields).
+  tombstones    Surface recoverable history from an HMI's append-only journal
+                (list/extract/diff tombstoned earlier saves).
   diff-hmi      Structured diff of two HMI files (directory + per-entry payloads).
   diff-tft      Structured diff of two TFT files (H1, H2, resources, usercode).
   diff-bytes    Generic per-byte diff of any two binary files.
@@ -62,6 +64,21 @@ def _cmd_inspect_tft(args: argparse.Namespace) -> int:
     if args.json:
         sys.argv.append("--json")
     return _main()
+
+
+def _cmd_tombstones(args: argparse.Namespace) -> int:
+    from scripts.tools.tombstone_extract import main as _main
+    argv = [args.hmi]
+    if args.list:
+        argv.append("--list")
+    elif args.extract is not None:
+        if not args.output:
+            print("ERROR: tombstones --extract requires -o/--output", file=sys.stderr)
+            return 2
+        argv += ["--extract", args.extract[0], args.extract[1], "-o", args.output]
+    elif args.diff is not None:
+        argv += ["--diff", args.diff]
+    return _main(argv)
 
 
 def _cmd_diff_hmi(args: argparse.Namespace) -> int:
@@ -286,6 +303,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("tft", help="path to .tft file")
     p.add_argument("--json", action="store_true", help="Emit JSON")
 
+    # ---- tombstones --------------------------------------------------------
+    p = sub.add_parser(
+        "tombstones",
+        help="Surface recoverable history from an HMI's append-only journal "
+             "(tombstoned earlier saves).",
+    )
+    p.add_argument("hmi", help="path to .HMI file")
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--list", action="store_true",
+                   help="list all tombstoned entries + which live entry supersedes them")
+    g.add_argument("--extract", nargs=2, metavar=("NAME", "INDEX"),
+                   help="extract INDEX-th tombstone matching NAME "
+                        "(stem 0.pa, page name main, Program.s, or main.HMI)")
+    g.add_argument("--diff", metavar="NAME",
+                   help="diff the live NAME blob vs every tombstoned version")
+    p.add_argument("-o", "--output", help="output path (required with --extract)")
+
     # ---- diff-hmi ----------------------------------------------------------
     p = sub.add_parser("diff-hmi", help="Structured diff of two HMI files.")
     p.add_argument("a")
@@ -488,6 +522,7 @@ _UNSAFE_CMDS = {"add-hotspot-hmi", "add-hotspot-tft", "add-xfloat-tft"}
 _DISPATCH = {
     "inspect-hmi":    _cmd_inspect_hmi,
     "inspect-tft":    _cmd_inspect_tft,
+    "tombstones":     _cmd_tombstones,
     "diff-hmi":       _cmd_diff_hmi,
     "diff-tft":       _cmd_diff_tft,
     "diff-bytes":     _cmd_diff_bytes,
