@@ -222,6 +222,68 @@ def _page_chain(target_page_id: int) -> bytes:
     return _entry(body)
 
 
+# Opcodes for the Checkbox/Radio/Button_T slot-2 toggle handler.
+_CLICK_OPCODE = bytes.fromhex("090004")   # touch / click-redraw op
+_TJMP_OPCODE = bytes.fromhex("542003")    # the `T` toggle-jump marker
+
+
+def _load(rec: int) -> bytes:
+    return b"\x01" + struct.pack("<I", rec)
+
+
+def _long(value: int) -> bytes:
+    return b"\x03" + struct.pack("<I", value & 0xFFFFFFFF)
+
+
+# GText scroll-arming opcodes (slot-0 trailing blocks).
+_SCROLL_INIT_OPCODE = bytes.fromhex("092408")   # arm the scroll motion
+_MOTION_JMP_OPCODE = bytes.fromhex("4c2003")     # `L` motion-jump marker
+
+
+def _gtext_scroll_blocks(en_rec: int, tim_rec: int, step: int,
+                         motion_addr: int) -> bytes:
+    """GText's two trailing slot-0 blocks: ``09 24 08 LOAD(en),<step>,
+    LOAD(tim),0`` then ``4c 20 03 <motion_addr>``.
+
+    ``step`` (the scroll-step literal) and ``motion_addr`` (the `L` label
+    biaoji) are both editor scratch — non-content-derivable; supplied by the
+    caller (the profile ``gtext_scroll`` scratch).  Byte-verified against the
+    g0 init in 03_untested-components (step 11, addr 0x2814) and
+    17_more_components (step 2, addr 0x2476)."""
+    scroll = (_SCROLL_INIT_OPCODE + _load(en_rec) + b","
+              + str(step).encode("ascii") + b"," + _load(tim_rec) + b",0")
+    motion = _MOTION_JMP_OPCODE + struct.pack("<I", motion_addr)
+    return _entry(scroll) + _entry(motion)
+
+
+def _toggle_down_chain(val_rec: int, comp_id: int, *, self_ref: bool) -> bytes:
+    """The Checkbox/Radio/Button_T slot-2 touch handler — toggles ``val``.
+
+    Byte-verified against the c0 / r0 / bt0 down handlers in
+    ``03_untested-components`` and ``17_more_components``::
+
+        click LOAD(val), 1, 1, long(0x16)     (09 00 04 …)
+        LOAD(val) = 0                          (cjmp val==0)
+        T long(0x0b)                           (54 20 03 — toggle jump)
+        LOAD(val) = 1
+        [Button_T only] ref <id>+long(65535)   (self-redraw)
+
+    The ``long(0x16)`` page-record ref and the ``T`` jump address ``0x0b``
+    are constants (identical across both fixtures); the ``val`` record is
+    page-resolved."""
+    out = bytearray()
+    out += _entry(_CLICK_OPCODE + _load(val_rec) + b",1,1," + _long(0x16))
+    out += _entry(_load(val_rec) + b"=0")
+    # `54 20 03 <u32 addr>` — the toggle-jump marker carries a raw 4-byte
+    # address (like the `4c 20 03` L marker), NOT a long literal.
+    out += _entry(_TJMP_OPCODE + struct.pack("<I", 0x0B))
+    out += _entry(_load(val_rec) + b"=1")
+    if self_ref:
+        out += _entry(REF_OPCODE + str(comp_id).encode("ascii")
+                      + b"+" + _long(0xFFFF))
+    return bytes(out)
+
+
 # HMI event-script slot mapping per component type (codes* key → slot).
 _EVENT_SLOTS = {
     1:   {"codesdown": 2, "codesup": 3, "codesslide": 4},   # Slider
@@ -387,9 +449,28 @@ def build_component_chains(hc, attstr_slots, page_record_base,
                              opcode_override=_setbrush_override(profile))
     if init:
         chains[0] = init
+    # GText(55) appends two scroll-arming blocks to its init (slot 0): the
+    # `09 24 08` scroll-init call + the `4c 20 03` motion-jump marker.  Both
+    # the step literal and the motion-label address are non-content-derivable
+    # editor scratch (they differ between two saves of an IDENTICAL g0), so
+    # they are supplied via the profile's ``gtext_scroll`` scratch
+    # (me/miata-dash#38) — like the Timer `S` biaoji.  Absent scratch → the
+    # scroll blocks are omitted (the rest of the init is still byte-exact).
+    if lei == 55 and init:
+        scratch = (profile.gtext_scroll if profile else None) or {}
+        params = scratch.get(hc.name) or scratch.get("*")
+        if params is not None:
+            step, motion_addr = params
+            chains[0] = init + _gtext_scroll_blocks(
+                resolver("en"), resolver("tim"), step, motion_addr)
     # The auto-fill exists for the display components that declare slot 1
     # in EVENT_LAYOUT (XFloat/Text/Prog/Button), plus overlap refs.
     chains[1] = _fill_with_refs(x, y, w, h, page_bco_global, overlap_ids, prefix_ids)
+    # Checkbox(56) / Radio(57) / Button_T(53) carry a slot-2 touch handler
+    # that toggles ``val`` (me/miata-dash#38).
+    if lei in (53, 56, 57):
+        chains[2] = _toggle_down_chain(resolver("val"), int(a.get("id") or 0),
+                                       self_ref=(lei == 53))
     return CompiledComponent(lei=lei, chains=chains)
 
 

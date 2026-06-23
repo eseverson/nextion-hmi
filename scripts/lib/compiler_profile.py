@@ -52,6 +52,12 @@ class CompilerProfile:
     brush_state: dict = field(default_factory=dict)
     """``{(page_name, comp_name): (en, backcolor)}`` — the static
     draw-brush state the editor leaves in a Text's reserved tail."""
+    gtext_scroll: dict = field(default_factory=dict)
+    """``{comp_name: (step, motion_addr)}`` — a GText's scroll-arming scratch
+    (the ``09 24 08`` step literal + the ``4c 20 03`` motion-jump label
+    biaoji).  Both differ between saves of an identical component, so they are
+    captured per-project from the reference TFT (me/miata-dash#38).  ``"*"``
+    is the wildcard key (every GText shares the value)."""
 
 
 # Version letter (H1[0x02]) → the version-dependent constants.
@@ -115,16 +121,65 @@ def project_scratch_for(tft_bytes: bytes, hmi=None) -> dict:
             f"{letter!r}; capture it from the project's reference TFT and "
             f"add it to compiler_profile._PROJECT_SCRATCH"
         )
-    return {
+    out = {
         "brush_state": dict(scratch["brush_state"]),
     }
+    # GText scroll scratch (step literal + motion-jump label) is recovered
+    # from the reference TFT itself when present, since it differs between
+    # otherwise-identical projects (me/miata-dash#38).
+    gs = _recover_gtext_scroll(tft_bytes, hmi)
+    if gs:
+        out["gtext_scroll"] = gs
+    return out
+
+
+def _recover_gtext_scroll(tft_bytes: bytes, hmi=None) -> dict:
+    """Recover each GText's ``(step, motion_addr)`` scroll scratch from the
+    reference TFT by decoding its slot-0 ``09 24 08`` scroll-init block and
+    the following ``4c 20 03`` motion marker.  Returns ``{comp_name:
+    (step, motion_addr)}`` (empty if no GText / no scroll block)."""
+    import struct as _struct
+    if hmi is None:
+        return {}
+    try:
+        from scripts.lib.tft_attrs import parse_appinf1_corrected
+        from scripts.lib.h2_cipher import encrypt as _h2
+    except Exception:
+        return {}
+    mc = int.from_bytes(tft_bytes[0x2E:0x32], "little")
+    a1 = parse_appinf1_corrected(_h2(tft_bytes[0xC8:0xC8 + 196], mc))
+    strd = a1["strdataaddr"]; objbase = a1["objxinxiadd"]; pageadd = a1["pageadd"]
+    out: dict = {}
+    for pi, hp in enumerate(hmi):
+        pe = tft_bytes[pageadd + pi * 16:pageadd + pi * 16 + 16]
+        objstar = _struct.unpack_from("<H", pe, 0)[0]
+        for ci, hc in enumerate(hp.components):
+            if hc.lei != 55:
+                continue
+            e = tft_bytes[objbase + (objstar + ci) * 232:
+                          objbase + (objstar + ci) * 232 + 232]
+            init = _struct.unpack_from("<I", e, 4)[0]
+            blob = tft_bytes[strd + init:strd + init + 256]
+            si = blob.find(b"\x09\x24\x08")
+            if si < 0:
+                continue
+            # 09 24 08 LOAD(en)[5] , <step ascii> , LOAD(tim)[5] , 0
+            p = si + 3 + 5 + 1            # past opcode + LOAD(en) + ','
+            j = blob.index(b",", p)
+            step = int(blob[p:j])
+            mi = blob.find(b"\x4c\x20\x03", si)
+            motion = _struct.unpack_from("<I", blob, mi + 3)[0] if mi >= 0 else 0
+            out[hc.name] = (step, motion)
+    return out
 
 
 def profile_for(tft_bytes: bytes, *,
-                brush_state: dict | None = None) -> CompilerProfile:
+                brush_state: dict | None = None,
+                gtext_scroll: dict | None = None) -> CompilerProfile:
     """Build the :class:`CompilerProfile` for the editor that produced
-    ``tft_bytes``.  The per-project scratch (``brush_state``) is passed in by
-    the caller (captured against that project's own reference TFT)."""
+    ``tft_bytes``.  The per-project scratch (``brush_state``, ``gtext_scroll``)
+    is passed in by the caller (captured against that project's own reference
+    TFT)."""
     letter = tft_bytes[0x02]
     const = _VERSION_LETTER_CONST.get(letter)
     if const is None:
@@ -141,6 +196,7 @@ def profile_for(tft_bytes: bytes, *,
         sysvar_overrides=dict(const["sysvar_overrides"]),
         frame_prefix=const.get("frame_prefix", 0x10),
         brush_state=dict(brush_state or {}),
+        gtext_scroll=dict(gtext_scroll or {}),
     )
 
 
