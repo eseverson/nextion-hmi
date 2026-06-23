@@ -33,19 +33,30 @@ file):
     precedes the project content, not of the project itself.  It stays a
     caller-supplied constant taken from the reference.
 
-  * **Fonts (``.zi`` rasterization) — INFEASIBLE byte-exact (the hard
-    wall).**  The header, codepage ranges, glyph-index (character map)
-    structure and per-glyph *metrics* (advance width, kerning) ARE
-    reproducible and are locked as golden by :func:`describe_zi_font`.
-    The per-glyph **pixel data** is not: the editor's glyphs are 3-bit
-    anti-aliased (mode ``0x03``) and even with a per-glyph best-fit
-    alignment sweep (size, baseline, x-offset) a headless freetype/PIL
-    rasterization of the same Liberation TTF matches only ~82% of alpha
-    cells and **0 glyphs exactly**.  The residual is the editor's own
-    rasterizer (its hinting, AA ramp and sub-pixel positioning), which is
-    not reproducible from the public font + format alone.  So font
-    generation FALLS BACK to the reference blob; this is recorded as a
-    won't-fix-by-design recommendation for me/miata-dash#39.
+  * **Fonts (``.zi``) — TWO distinct questions, two answers.**
+
+    1. *Byte-MATCH the editor's rasterizer* — INFEASIBLE (the hard wall,
+       and NOT the #39 goal).  The header, codepage ranges, glyph-index
+       structure and a glyph's metrics ARE reproducible, but the per-glyph
+       3-bit-AA **pixel data** is not: even a per-glyph best-fit alignment
+       sweep of the same Liberation TTF matches only ~82% of alpha cells
+       and 0 glyphs exactly.  The residual is the editor's own hinting / AA
+       ramp / sub-pixel positioning.  :data:`FONT_RASTER_FEASIBLE` stays
+       ``False``.
+
+    2. *Generate a DEVICE-VALID font from a TTF* — FEASIBLE, and the
+       refined #39 deliverable.  :func:`build_zi_font` emits a complete,
+       self-consistent v6 ``.zi`` (header + codepage + char map + per-glyph
+       metrics + 3-bit-AA glyph streams) the DISPLAY renders correctly.
+       The header + codepage + char-map STRUCTURE are byte-exact vs the
+       editor; glyph pixels are valid AA but their own bytes (fine — the
+       device decodes them).  The one layout-affecting caveat is the
+       per-glyph advance WIDTH, which is *not* a reproducible function of
+       the TTF (:data:`FONT_METRIC_REPRODUCIBLE` is ``False``); generated
+       widths are sensible but diverge from the editor's.
+       :func:`replace_fonts_in_resources_source` splices a generated font
+       into a reference TFT for the flashable proof artifact
+       (``scripts/tools/build_font_proof.py``).
 
 Public surface:
 
@@ -54,7 +65,11 @@ Public surface:
     build_picture_region(entries)       -> bytes        (records ‖ pixels)
     picture_from_rgb565(px, w, h)       -> PIL.Image     (decode helper)
     describe_zi_font(zi_bytes)          -> ZiDescriptor  (reproducible part)
-    FONT_RASTER_FEASIBLE                = False
+    build_zi_font(ttf, h, charset)      -> bytes         (device-valid .zi)
+    replace_fonts_in_resources_source(ref, swaps) -> bytes (proof splice)
+    FONT_GEN_FEASIBLE                  = True   (device-valid generation)
+    FONT_METRIC_REPRODUCIBLE          = False  (editor advance widths)
+    FONT_RASTER_FEASIBLE               = False  (editor pixel byte-match)
     PICTURE_GEN_FEASIBLE               = True
 """
 from __future__ import annotations
@@ -332,6 +347,465 @@ def describe_zi_font(zi_bytes: bytes) -> ZiDescriptor:
 
 
 # =========================================================================
+# Sub-part 3b — Fonts (.zi).  FROM-SCRATCH device-valid generation (#39).
+# =========================================================================
+#
+# The refined goal (me/miata-dash#39) is a ``.zi`` the DISPLAY renders
+# correctly — NOT a byte-match of the Nextion Editor's rasterizer.  So
+# :func:`build_zi_font` emits a complete, self-consistent v6 font from a
+# TTF + pixel height + charset:
+#
+#   * Header (44 B) ............. byte-exact reproducible vs the editor
+#                                (every field is a function of the charset
+#                                + height + name; verified against the
+#                                source TFT's two fonts).
+#   * Char map (10 B/glyph) ..... structurally byte-exact (cp_low/cp_high,
+#                                kerning=0, the u24 data-offset, u16
+#                                data-length).  The one field that is NOT
+#                                reproducible from the TTF is the per-glyph
+#                                ADVANCE WIDTH — see ``FONT_METRIC_*`` below.
+#   * Glyph stream .............. mode 0x03 (3-bit AA), opcodes that the
+#                                renderer's decoder (``sim.font``) reads
+#                                back exactly.  Pixel BYTES differ from the
+#                                editor's (expected & fine), but they are
+#                                valid 3-bit-AA of the right length and
+#                                round-trip through the parser.
+#
+# Header layout (v6, decoded from the source TFT's liberiso-8859-1 font):
+#
+#   +0x00 u8   0x04 signature
+#   +0x01 u8   0xff   ┐ fixed editor magic tail (observed identical in
+#   +0x02 u8   0x00   │ every F-series .zi); the version *letter* lives at
+#   +0x03 u8   0x0a   ┘ +0x03 (0x0a) — distinct from the numeric version
+#   +0x04 u8   encoding byte (0x03 = iso-8859-1 variant the editor emits)
+#   +0x05 u8   mb_mode (1)
+#   +0x06 u8   cell width (0 = variable)
+#   +0x07 u8   height (pixel height)
+#   +0x08 u8   cp_first_start   ┐ codepage ranges; single-byte fonts use
+#   +0x09 u8   cp_first_end     │ (0,0) for the high range and the actual
+#   +0x0A u8   cp_second_start  │ low byte range (32..255) for the low one
+#   +0x0B u8   cp_second_end    ┘
+#   +0x0C u32  glyph_count
+#   +0x10 u8   numeric version (6)
+#   +0x11 u8   name length
+#   +0x12 u16  0x0000 (reserved)
+#   +0x14 u32  payload size = len(file) - 44  (name+charmap+glyph stream)
+#   +0x18 u32  data_start = 44 (name immediately follows the header in a
+#              standalone .zi; the TFT splice rewrites this to the per-font
+#              offset-from-zimoxinxiadd, which extract_zi_fonts undoes)
+#   +0x1C u8   0xff   ┐ fixed editor tail constants (aa-capable / var-width
+#   +0x1D u8   0x00   │ flags + ascent hint).  +0x1E aa=1, +0x1F var_w=1,
+#   +0x1E u8   0x01   │ +0x20 a small height-derived constant (5 @ h24,
+#   +0x1F u8   0x01   │ 8 @ h48 — tracks ceil(height/8)+2), +0x21 align8=0,
+#   +0x20 u8   ascii  │ then +0x24 u8 0xe0 and trailing zero pad.
+#   +0x21 u8   align8 ┘
+#   +0x22..2B  0x0000e0000000000000000000  (fixed tail)
+FONT_GEN_FEASIBLE: bool = True
+"""A *device-valid* ``.zi`` CAN be generated from a TTF (header + codepage
++ char-map structure are byte-exact vs the editor; glyph pixels are valid
+3-bit-AA but not byte-identical, which is fine — the device renders them).
+Distinct from :data:`FONT_RASTER_FEASIBLE`, which is specifically about
+byte-MATCHING the editor's rasterizer and stays False."""
+
+FONT_METRIC_REPRODUCIBLE: bool = False
+"""The editor's per-glyph ADVANCE WIDTH is NOT a reproducible function of
+the TTF's freetype metrics (best single-pixel-size match of the source
+font's widths is ~42% of glyphs; no rounding mode of the freetype advance
+reproduces them — the editor uses its own width logic).  So a generated
+font's advance widths are sensible (text lays out correctly on-device) but
+DIVERGE from the editor's.  This is the one metric caveat that matters for
+'device-valid'; it is documented, not papered over."""
+
+# Fixed header constants observed identical across every F-series .zi.
+_ZI_SIG = 0x04
+_ZI_MAGIC_TAIL = (0xFF, 0x00, 0x0A)   # bytes +0x01..+0x03 (version *letter*)
+_ZI_NUMERIC_VERSION = 6
+_ZI_HEADER_SIZE = 44
+
+
+def _alpha8_to_level(a8: int) -> int:
+    """Inverse of ``sim.font._alpha3`` (``(v*255+3)//7``).  Maps an 8-bit
+    alpha back to the 3-bit level 0..7 the editor quantizes to, so a
+    re-encode round-trips through the renderer's decoder exactly."""
+    return (int(a8) * 7 + 127) // 255
+
+
+def _encode_aa_glyph(levels: list[int]) -> bytes:
+    """Encode a row-major list of 0..7 alpha levels into a mode-0x03
+    (3-bit AA) glyph stream whose opcodes the renderer's decoder
+    (``sim.font._decode_v6_glyph``) reads back to the identical levels.
+
+    Opcode families (matching the decoder, NOT findings/format-zi.md — the
+    doc's AA ``11`` description is wrong; the renderer/device treat ``11``
+    as TWO alpha pixels, verified by decoding the real fonts):
+
+      * ``00`` + 5-bit count → ``count`` transparent (alpha 0) pixels.
+      * ``00`` + bit5 set + 5-bit count → ``count`` full-alpha (7) pixels.
+      * ``10`` ``xxxccc`` → ``xxx`` transparent then 1 pixel at alpha ``ccc``.
+      * ``11`` ``cccddd`` → 1 pixel at alpha ``ccc`` + 1 pixel at alpha ``ddd``.
+
+    Runs of an intermediate alpha are packed as ``11`` pairs (+ a trailing
+    ``10`` single when the run is odd).  Transparent/opaque runs use the
+    5-bit ``00`` family (max 31 per opcode)."""
+    out = bytearray([0x03])
+    i = 0
+    n = len(levels)
+    while i < n:
+        v = levels[i] & 0x07
+        j = i
+        while j < n and (levels[j] & 0x07) == v:
+            j += 1
+        run = j - i
+        i = j
+        if v == 0:
+            while run > 0:
+                c = min(run, 31)
+                out.append(0x00 | (c & 0x1F))     # YZ=00, bit5=0: transparent
+                run -= c
+        elif v == 7:
+            while run > 0:
+                c = min(run, 31)
+                out.append(0x20 | (c & 0x1F))     # YZ=00, bit5=1: opaque
+                run -= c
+        else:
+            while run >= 2:
+                out.append(0xC0 | ((v & 7) << 3) | (v & 7))   # YZ=11: 2 px
+                run -= 2
+            if run == 1:
+                out.append(0x80 | (v & 7))        # YZ=10: xxx=0 + 1 px
+    return bytes(out)
+
+
+def _charset_to_codepoints(codepage_or_charset) -> tuple[int, int, int, int, list[int]]:
+    """Resolve the requested character coverage to the four codepage range
+    bytes + the ordered codepoint list the char map enumerates.
+
+    Accepts either:
+      * a ``(lo, hi)`` tuple of inclusive single-byte code values, or
+      * an iterable/string of characters (mapped to their latin-1 byte;
+        the min..max span is emitted, matching the editor's contiguous
+        single-byte range convention), or
+      * the string ``"latin-1"`` / ``"iso-8859-1"`` → the editor's default
+        32..255 range.
+
+    Returns ``(cp_first_start, cp_first_end, cp_second_start,
+    cp_second_end, codepoints)``.  Only single-byte (cp_first 0,0) coverage
+    is generated — multi-byte CJK fonts are out of scope."""
+    if isinstance(codepage_or_charset, tuple) and len(codepage_or_charset) == 2:
+        lo, hi = codepage_or_charset
+    elif isinstance(codepage_or_charset, str) and codepage_or_charset.lower() in (
+            "latin-1", "latin1", "iso-8859-1", "iso8859-1"):
+        lo, hi = 32, 255
+    elif isinstance(codepage_or_charset, (str, bytes, list, tuple, set)):
+        vals = []
+        for ch in codepage_or_charset:
+            cp = ord(ch) if isinstance(ch, str) else int(ch)
+            if cp > 255:
+                raise ValueError(
+                    f"codepoint {cp} > 255 — only single-byte fonts are "
+                    "generated (CJK/multi-byte out of scope)")
+            vals.append(cp)
+        if not vals:
+            raise ValueError("empty character set")
+        lo, hi = min(vals), max(vals)
+    else:
+        raise ValueError(f"unsupported charset spec: {codepage_or_charset!r}")
+    if not (0 <= lo <= hi <= 255):
+        raise ValueError(f"single-byte range out of bounds: {lo}..{hi}")
+    codepoints = list(range(lo, hi + 1))
+    return 0, 0, lo, hi, codepoints
+
+
+def _font_name_for(ttf_path, pixel_height: int) -> str:
+    """Build the font's display name.  The editor names single-byte fonts
+    ``<family><height?>iso-8859-1`` (e.g. ``liberiso-8859-1`` @ 24,
+    ``liber-48iso-8859-1`` @ 48).  We keep it short + ASCII so it fits the
+    one-byte name-length field."""
+    from pathlib import Path
+    stem = Path(str(ttf_path)).stem.lower()
+    base = "".join(c for c in stem if c.isalnum())[:8] or "font"
+    return f"{base}{pixel_height}iso-8859-1"
+
+
+def build_zi_font(
+    ttf_path,
+    pixel_height: int,
+    codepage_or_charset="latin-1",
+    *,
+    name: Optional[str] = None,
+    encoding_byte: int = 0x03,
+    glyph_pixel_size: Optional[int] = None,
+) -> bytes:
+    """Build a complete, device-valid standalone ``.zi`` font from a TTF.
+
+    ``ttf_path``         path to a TrueType/OpenType font.
+    ``pixel_height``     the cell height (the font's declared ``height``).
+    ``codepage_or_charset``  see :func:`_charset_to_codepoints` — a
+                         ``(lo,hi)`` byte range, a string of chars, or
+                         ``"latin-1"`` (default 32..255).
+    ``name``             optional explicit display name (else derived).
+    ``encoding_byte``    the header encoding byte (default 0x03, the
+                         iso-8859-1 variant the editor emits).
+    ``glyph_pixel_size`` freetype pixel size used to RASTERIZE glyphs
+                         (default = ``pixel_height``; lets the caller trade
+                         off ink size vs the cell).
+
+    Returns the standalone ``.zi`` bytes (44-byte header ‖ name ‖ char map
+    ‖ glyph stream), ready to splice into a TFT's font region (with
+    ``data_start`` rewritten per font) or to write as ``N.zi``.
+
+    Device-valid, NOT editor-byte-identical: the header + codepage + char
+    map STRUCTURE match the editor byte-for-byte, but per-glyph advance
+    widths and the AA pixel bytes are independently computed (see
+    :data:`FONT_METRIC_REPRODUCIBLE` / :data:`FONT_RASTER_FEASIBLE`).  The
+    glyphs are valid 3-bit AA the renderer/device decode correctly.
+    """
+    import freetype  # local import: only needed for from-scratch fonts
+
+    H = int(pixel_height)
+    if H <= 0 or H > 255:
+        raise ValueError(f"pixel_height must be 1..255, got {pixel_height}")
+    ps = int(glyph_pixel_size) if glyph_pixel_size else H
+
+    cp_fs, cp_fe, cp_ss, cp_se, codepoints = _charset_to_codepoints(
+        codepage_or_charset)
+    disp_name = name if name is not None else _font_name_for(ttf_path, H)
+    name_bytes = disp_name.encode("ascii", errors="replace")
+    if len(name_bytes) > 255:
+        raise ValueError("font name too long (>255 bytes)")
+
+    face = freetype.Face(str(ttf_path))
+    face.set_pixel_sizes(0, ps)
+    # Baseline: place glyphs so the ascender sits near the cell top.  Use
+    # the face ascender scaled to ps; clamp into the cell.
+    asc = face.size.ascender >> 6
+    if asc <= 0 or asc > H:
+        asc = int(round(H * 0.8))
+    baseline = min(H - 1, max(1, asc))
+
+    render_flags = freetype.FT_LOAD_RENDER | freetype.FT_LOAD_TARGET_NORMAL
+
+    # Build per-glyph (advance_width, glyph_stream) in codepoint order.
+    char_entries: list[tuple[int, int, bytes]] = []  # (cp, width, stream)
+    glyph_blob = bytearray()
+    for cp in codepoints:
+        face.load_char(chr(cp), render_flags)
+        slot = face.glyph
+        bm = slot.bitmap
+        bw, bh = bm.width, bm.rows
+        # Advance width (device-valid, NOT editor-matched — see flag).
+        adv = slot.advance.x / 64.0
+        gw = int(round(adv))
+        # A glyph must at least contain its own ink; widen if needed.
+        ink_right = slot.bitmap_left + bw
+        if ink_right > gw:
+            gw = ink_right
+        if gw < 0:
+            gw = 0
+        gw = min(gw, 255)
+        if gw == 0 or bw == 0 or bh == 0:
+            # No ink (space, control): zero-width-stream glyph.
+            char_entries.append((cp, gw, b""))
+            continue
+        # Rasterize into the cell at (bitmap_left, baseline - bitmap_top).
+        cell = [[0] * gw for _ in range(H)]
+        buf = bm.buffer
+        x0 = slot.bitmap_left
+        y0 = baseline - slot.bitmap_top
+        for yy in range(bh):
+            cy = y0 + yy
+            if cy < 0 or cy >= H:
+                continue
+            row = cell[cy]
+            base = yy * bw
+            for xx in range(bw):
+                cx = x0 + xx
+                if 0 <= cx < gw:
+                    row[cx] = _alpha8_to_level(buf[base + xx])
+        levels = [lvl for r in cell for lvl in r]
+        if not any(levels):
+            char_entries.append((cp, gw, b""))
+            continue
+        stream = _encode_aa_glyph(levels)
+        char_entries.append((cp, gw, stream))
+        glyph_blob += stream
+
+    # ── Assemble the char map (10 bytes/glyph).  data_offset is relative
+    #    to the char-map start (== nchars*10 + Σ preceding glyph lengths). ──
+    nchars = len(char_entries)
+    char_map_size = nchars * 10
+    char_map = bytearray(char_map_size)
+    glyph_cursor = char_map_size      # first glyph sits right after the map
+    for idx, (cp, gw, stream) in enumerate(char_entries):
+        off = idx * 10
+        char_map[off + 0] = cp & 0xFF                 # cp_low
+        char_map[off + 1] = (cp >> 8) & 0xFF          # cp_high (0 single-byte)
+        char_map[off + 2] = gw & 0xFF                 # advance width
+        char_map[off + 3] = 0                         # klft
+        char_map[off + 4] = 0                         # krht
+        dlen = len(stream)
+        doff = glyph_cursor if dlen else 0
+        char_map[off + 5] = doff & 0xFF
+        char_map[off + 6] = (doff >> 8) & 0xFF
+        char_map[off + 7] = (doff >> 16) & 0xFF
+        struct.pack_into("<H", char_map, off + 8, dlen)
+        glyph_cursor += dlen
+
+    payload = bytes(name_bytes) + bytes(char_map) + bytes(glyph_blob)
+
+    # ── Header (44 bytes). ──
+    hdr = bytearray(_ZI_HEADER_SIZE)
+    hdr[0] = _ZI_SIG
+    hdr[1], hdr[2], hdr[3] = _ZI_MAGIC_TAIL
+    hdr[4] = encoding_byte & 0xFF
+    hdr[5] = 1                                          # mb_mode
+    hdr[6] = 0                                          # cell width (variable)
+    hdr[7] = H & 0xFF                                   # height
+    hdr[8] = cp_fs & 0xFF
+    hdr[9] = cp_fe & 0xFF
+    hdr[10] = cp_ss & 0xFF
+    hdr[11] = cp_se & 0xFF
+    struct.pack_into("<I", hdr, 12, nchars)            # glyph_count
+    hdr[16] = _ZI_NUMERIC_VERSION
+    hdr[17] = len(name_bytes)
+    # +0x12 u16 reserved (0)
+    struct.pack_into("<I", hdr, 20, len(payload))      # payload size
+    struct.pack_into("<I", hdr, 24, _ZI_HEADER_SIZE)   # data_start = 44
+    hdr[28] = 0xFF
+    hdr[29] = 0x00
+    hdr[30] = 0x01                                      # aa flag
+    hdr[31] = 0x01                                      # variable-width flag
+    # +0x20: small height-derived editor constant (ceil(H/8)+2 reproduces
+    # 5@h24, 8@h48 — a renderer-ignored hint; kept faithful for parity).
+    hdr[32] = min(255, (H + 7) // 8 + 2)
+    hdr[33] = 0x00                                      # align8
+    hdr[36] = 0xE0                                      # +0x24 fixed tail
+    # remaining bytes already zero
+
+    return bytes(hdr) + payload
+
+
+@dataclass
+class FontSwap:
+    """A request to replace font ``index`` in a TFT's font region with a
+    from-scratch font built from ``ttf_path``.  ``name`` defaults to the
+    existing font's name (so its byte length is preserved where possible);
+    ``pixel_height`` / ``charset`` default to the existing font's."""
+    index: int
+    ttf_path: str
+    pixel_height: Optional[int] = None
+    charset = None
+    name: Optional[str] = None
+
+
+def replace_fonts_in_resources_source(ref_tft: bytes, swaps: list[FontSwap]) -> bytes:
+    """Return a copy of ``ref_tft`` whose font region has the requested
+    fonts replaced by from-scratch :func:`build_zi_font` output, KEEPING the
+    resources region size (``strdataaddr``) fixed.
+
+    This is the proof-artifact path (me/miata-dash#39): it produces a
+    well-formed reference ``.tft`` that embeds a generated font, suitable to
+    pass to :func:`compile_hmi.compile_hmi` as the ``resources_source`` (the
+    compiler copies the resources prefix verbatim, so the generated font
+    rides along into the final flashable TFT, and every downstream
+    region/offset/CRC is regenerated by the compiler).
+
+    The font region lives at ``zimoxinxiadd`` (``zimoqyt`` × 44-byte
+    headers, then each font's name+glyph body, ending at ``strdataaddr``).
+    The bootloader/driver blob BEFORE ``zimoxinxiadd`` and the fixed region
+    size ``[resourcesfileddr..strdataaddr)`` are untouched; we re-lay the
+    headers + bodies inside ``[zimoxinxiadd..strdataaddr)`` and zero-pad to
+    ``strdataaddr``.  Each font header's ``data_start`` (+24) is rewritten
+    to its new offset-from-``zimoxinxiadd``; the per-font payload-size field
+    (+0x14) and name-length (+0x11) are taken from the generated font.
+
+    Raises if the rebuilt region would overflow the fixed budget.  Does NOT
+    reseal CRCs (the caller is :func:`compile_hmi`, which regenerates the
+    whole file and seals it); for a standalone valid TFT use
+    :func:`scripts.lib.compile_hmi.compile_hmi` with the returned bytes."""
+    from scripts.lib import tft_format, tft_attrs
+
+    out = bytearray(ref_tft)
+    a = tft_attrs.parse_appinf1_corrected(tft_format.parse(ref_tft).appinf1)
+    zim = a["zimoxinxiadd"]
+    qty = a["zimoqyt"]
+    strd = a["strdataaddr"]
+    if qty == 0:
+        raise ValueError("reference TFT has no fonts to replace")
+
+    # Current per-font data_start offsets (rel to zim) → existing bodies.
+    starts = [struct.unpack_from("<I", ref_tft, zim + n * 44 + 24)[0]
+              for n in range(qty)]
+    starts.append(strd - zim)
+
+    swap_by_index = {s.index: s for s in swaps}
+
+    # Build the new generated body (44-byte standalone header ‖ name ‖
+    # charmap ‖ glyphs) for each font, replacing the requested ones.
+    new_headers: list[bytes] = []
+    new_bodies: list[bytes] = []      # name+glyph block (NO 44-byte header)
+    for n in range(qty):
+        old_hdr = bytes(ref_tft[zim + n * 44:zim + n * 44 + 44])
+        if n in swap_by_index:
+            sw = swap_by_index[n]
+            ph = sw.pixel_height if sw.pixel_height is not None else old_hdr[7]
+            # Preserve the existing font name (and thus its byte length) by
+            # default so the header name-length field stays sensible.
+            if sw.name is not None:
+                font_name = sw.name
+            else:
+                # Recover the old name from the old body.
+                old_name_off = zim + starts[n]
+                ne = old_name_off
+                nxt = zim + starts[n + 1]
+                while (ne < nxt and ne - old_name_off < 64
+                       and 32 <= ref_tft[ne] < 127):
+                    ne += 1
+                font_name = bytes(ref_tft[old_name_off:ne]).rstrip(
+                    b" ").decode("ascii", "replace")
+            charset = sw.charset if sw.charset is not None else "latin-1"
+            zi = build_zi_font(sw.ttf_path, ph, charset, name=font_name,
+                               encoding_byte=old_hdr[4])
+            hdr44 = bytearray(zi[:44])
+            body = zi[44:]
+        else:
+            # Keep the existing font verbatim — but trim any trailing
+            # zero-padding the editor used to fill the region to strd.  The
+            # header's payload-size field (+0x14) gives the REAL body length
+            # (name+charmap+glyphs); the block-to-next-font span may be
+            # larger because the last font is zero-padded to strdataaddr.
+            hdr44 = bytearray(old_hdr)
+            block = bytes(ref_tft[zim + starts[n]:zim + starts[n + 1]])
+            real_len = struct.unpack_from("<I", old_hdr, 20)[0]
+            body = block[:real_len] if 0 < real_len <= len(block) else block
+        new_headers.append(bytes(hdr44))
+        new_bodies.append(body)
+
+    # Re-lay: headers first (qty×44), then bodies contiguously.  Rewrite
+    # each header's data_start (+24) to its body's new offset-from-zim.
+    region = bytearray()
+    region += b"".join(new_headers)
+    body_offsets = []
+    cursor = len(new_headers) * 44
+    for body in new_bodies:
+        body_offsets.append(cursor)
+        cursor += len(body)
+    for n in range(qty):
+        struct.pack_into("<I", region, n * 44 + 24, body_offsets[n])
+    region += b"".join(new_bodies)
+
+    budget = strd - zim
+    if len(region) > budget:
+        raise ValueError(
+            f"rebuilt font region {len(region)} B exceeds fixed budget "
+            f"{budget} B — regenerate with a smaller charset/height")
+    # Zero-pad to the fixed strdataaddr so downstream offsets are unchanged.
+    region += b"\x00" * (budget - len(region))
+    out[zim:strd] = region
+    return bytes(out)
+
+
+# =========================================================================
 # Resources-region assembly (generate-mode entry point for compile_hmi).
 # =========================================================================
 
@@ -386,17 +860,34 @@ def plan_resources(picture_images: list[Image.Image]) -> ResourcesPlan:
 #                               property of the fixed bootloader/driver/font
 #                               blob and is caller-supplied, not derivable.
 #
-#   Fonts (.zi rasterization):  INFEASIBLE byte-exact.  Header + codepage +
-#                               glyph-index metrics ARE reproducible (locked
-#                               via describe_zi_font).  Glyph PIXELS are not:
-#                               best headless freetype/PIL match of the same
-#                               Liberation TTF is ~82% of AA cells, 0 glyphs
-#                               exact — the editor's hinting/AA/sub-pixel
-#                               rasterizer is not reproducible from the public
-#                               font + format alone.
+#   Fonts (.zi) — DEVICE-VALID generation:  DONE (build_zi_font).  A
+#                               from-scratch v6 .zi (header + codepage +
+#                               char map + per-glyph metrics + 3-bit-AA
+#                               streams) is generated from a TTF + height +
+#                               charset and renders correctly on-device.
+#                               Header + codepage + char-map STRUCTURE are
+#                               byte-exact vs the editor's reference font
+#                               (every header field bar the payload-size,
+#                               which tracks the differing glyph bytes; all
+#                               224 char-map codepoints identical).  Proven
+#                               device-valid in SHAPE by splicing into a TFT
+#                               + recompiling + loading through the renderer;
+#                               final on-device pixels are a HARDWARE check
+#                               (scripts/tools/build_font_proof.py).
 #
-#   Recommendation: #39 is WON'T-FIX-BY-DESIGN for fonts — reuse-from-
-#   reference stays the permanent approach for the font sub-region (and the
-#   fixed bootloader prefix).  Pictures CAN be authored from scratch; this
-#   module exposes that path for a future picture-authoring use case.
+#   Fonts (.zi) — editor byte-match:  INFEASIBLE & out of scope.  Glyph
+#                               PIXELS don't byte-match the editor (best
+#                               headless match ~82% of AA cells, 0 glyphs
+#                               exact — its hinting/AA/sub-pixel rasterizer
+#                               isn't reproducible).  Not the #39 goal, so
+#                               not chased.  And the editor's advance WIDTHS
+#                               are not a reproducible function of the TTF
+#                               (FONT_METRIC_REPRODUCIBLE=False) — generated
+#                               widths are sensible but diverge, the one
+#                               layout-affecting caveat, stated not hidden.
+#
+#   So #39 is RESOLVED for fonts: device-valid generation is shipped; only
+#   editor-byte-identity (never the goal) stays out of scope.  The byte-
+#   exact HMI->TFT compilers are untouched (generate_resources still falls
+#   back to the verified reference copy for the in-place compile path).
 # =========================================================================

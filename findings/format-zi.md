@@ -105,8 +105,19 @@ we treat both runs as ink in monochrome glyph rendering.)*
 |------|------------------------------------------------------|
 | `00` | `dddddd + 1` zero-alpha pixels                       |
 | `01` | `dddddd + 1` full-alpha pixels                       |
-| `10` | one pixel at alpha `dddddd & 0x07` (3-bit)           |
-| `11` | run of length `((dddddd >> 3) + 1)` at alpha `dddddd & 0x07` |
+| `10` | `eee` zero pixels then one pixel at alpha `ddd` (`eeeddd` packs the low 6 bits) |
+| `11` | TWO pixels: one at alpha `ccc`, one at alpha `ddd` (`cccddd`) |
+
+> **Correction (font-gen, #39):** an earlier draft described `11` as a
+> *run* of `((d>>3)+1)` pixels at alpha `d&7`.  That does NOT match the
+> real fonts — decoding the editor's `liberiso-8859-1` with the run rule
+> produces garbage, while the **two-pixels** rule (`cccddd` → one pixel at
+> `ccc`, one at `ddd`) reconstructs clean glyphs.  The renderer
+> (`sim/font.py::_decode_v6_glyph`) and the generator
+> (`resources_generator.py::_encode_aa_glyph`) both use the two-pixels
+> form, and a round-trip over every glyph in the source fonts confirms it.
+> Likewise `10` is `eeeddd` = `eee` transparent pixels then one alpha-`ddd`
+> pixel (not just a bare single pixel).
 
 Each emitted pixel is `(alpha << 5)` in the 8-bit alpha output (so 7 →
 0xE0, 1 → 0x20). For renderer compositing this gets multiplied by the
