@@ -368,12 +368,16 @@ def patch_l_markers(region: bytes, region_base: int = 0) -> bytes:
         i += 1
     if s_addr is None:
         return bytes(buf)
-    # Patch every L marker.
+    # Patch every L marker that still holds the PLACEHOLDER addr (0).  Only
+    # the timer re-arm L is emitted with a 0 placeholder for back-patching;
+    # the GText scroll motion marker (me/miata-dash#38) carries its captured
+    # scratch addr already and must NOT be overwritten by the S-pair address.
     i = 0
     while i + 11 <= len(buf):
         if (struct.unpack_from("<I", buf, i)[0] == 7
                 and buf[i + 4] == 0x4C and buf[i + 5] == 0x20
-                and buf[i + 6] == 0x03):
+                and buf[i + 6] == 0x03
+                and struct.unpack_from("<I", buf, i + 7)[0] == 0):
             struct.pack_into("<I", buf, i + 7, s_addr & 0xFFFFFFFF)
         i += 1
     return bytes(buf)

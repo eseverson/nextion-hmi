@@ -247,6 +247,41 @@ _SPILL_PTR_BYTES = {
 }
 
 
+def test_untested_usercode_byte_exact_up_to_spill():
+    """STRICT whole-file proof for the clean matched pair: compiling
+    ``untested.HMI`` reproduces the ENTIRE usercode region — every page's
+    header, event region (init bytecode + auto-fills + cross-redraw refs +
+    the Checkbox/Radio/Button_T toggle handlers + the GText scroll blocks),
+    and pages 0-2 media blobs — byte-for-byte, right up to the page-3 frame
+    image.  The only span not reproduced is the page-3 frame's Sstr/molloc
+    SPILL region (Qrcode/GText/Curve), whose framing holds non-content-
+    derivable editor draw-brush scratch (see module docstring), so the
+    whole-file round-trip stops being byte-exact there.
+
+    This proves whole-component generation (objxinxi offsets, event bytecode,
+    name-hash, AppAllvas, binattinf for all 11 new classes) is byte-exact —
+    the residual is isolated to the spill region alone.
+    """
+    from scripts.lib.compile_hmi import compile_hmi
+
+    hmi_path = UNTESTED / "untested.HMI"
+    tft_path = UNTESTED / "untested.tft"
+    ref = tft_path.read_bytes()
+    out = compile_hmi(str(hmi_path), str(tft_path))
+
+    a1 = _dirs(ref)
+    strd, pageadd = a1["strdataaddr"], a1["pageadd"]
+    # Page 3 is the first (and only) page carrying spill classes; its media
+    # blob starts at strd+hexpos.  Everything in the usercode region before
+    # it must be byte-identical.
+    pe = ref[pageadd + 3 * 16:pageadd + 3 * 16 + 16]
+    hexpos = struct.unpack_from("<I", pe, 4)[0]
+    seg_end = strd + hexpos
+    assert out[strd:seg_end] == ref[strd:seg_end], (
+        "usercode region diverges before the page-3 spill region: first diff "
+        f"at usercode+{next(i for i in range(seg_end - strd) if out[strd + i] != ref[strd + i]):#x}")
+
+
 @pytest.mark.parametrize("rec", _SPILL, ids=_SPILL_IDS)
 def test_spill_frame_block_inblock_fields(rec):
     """Qrcode/GText/Curve: every in-block ``<Kind>_PARAM`` field matches the
