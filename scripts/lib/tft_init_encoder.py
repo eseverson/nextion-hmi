@@ -121,6 +121,7 @@ EMPTY_INIT_TYPES: frozenset[int] = frozenset({
 # one-slot insertion in the size-8 opcode list).
 OPCODE: dict[str, bytes] = {
     "setbrush": bytes((0x09, 0x1d, 0x08)),  # 14-arg state-set
+    "zhizhen":  bytes((0x09, 0x0a, 0x08)),  # gauge / pointer draw
     "qrcode":   bytes((0x09, 0x08, 0x08)),
     "draw3d":   bytes((0x09, 0x07, 0x08)),
     "nstr":     bytes((0x09, 0x13, 0x04)),
@@ -348,16 +349,29 @@ def ref_templates(comp_type: int, attrs: dict) -> list[tuple]:
         return [_pic()]
 
     if label == "picc":
-        # xpic with VVS offsets — q0 / cropped picture
+        # xpic <x>,<y>,<w>,<h>,<x>+<vvs0>,<y>+<vvs1>,LOAD(picc) — the crop
+        # origin offsets vvs0/vvs1 have attposup -1 (F-series): they are
+        # compile-time constants inlined as ASCII (NOT LOADs).  Byte-verified
+        # against 03_untested-components/17_more_components q0 (vvs0=vvs1=0 →
+        # ``0+0,0+0``).
+        vvs0 = int(attrs.get('vvs0') or 0)
+        vvs1 = int(attrs.get('vvs1') or 0)
         return [('xpic', [
             ('coord', 'x'), ('lit', ','),
             ('coord', 'y'), ('lit', ','),
             ('coord', 'w'), ('lit', ','),
             ('coord', 'h'), ('lit', ','),
-            ('expr', ('coord', 'x', '+', ('attr', 'vvs0'))), ('lit', ','),
-            ('expr', ('coord', 'y', '+', ('attr', 'vvs1'))), ('lit', ','),
+            ('coord', 'x'), ('lit', f'+{vvs0},'),
+            ('coord', 'y'), ('lit', f'+{vvs1},'),
             ('attr', 'picc'),
         ])]
+
+    if label == "zhizhen":
+        # Gauge / pointer — emitted by :func:`_encode_zhizhen_init` (needs
+        # the attr resolver to LOAD sibling records at val+1 / pco+1 / pco+2,
+        # which aren't named in PER_LEI_LAYOUT).  Returning [] here routes it
+        # through the dedicated encoder in :func:`encode_init_block`.
+        return []
 
     if label == "qrcode":
         return [_qrcode(sta)]
@@ -966,6 +980,59 @@ def _encode_radio_init(
     return flatten_cglist(cglist)
 
 
+# Zhizhen (gauge) draw opcode in the 'D' build (byte-verified vs untested z0).
+_OP_ZHIZHEN = bytes((0x09, 0x0a, 0x08))
+
+
+def _encode_zhizhen_init(
+    comp: "Component",
+    attr_addr: Callable[[str], int],
+    opcode_override: dict | None = None,
+) -> bytes:
+    """Encode the Zhizhen / Gauge (lei 122) Ref event.
+
+    Two blocks, byte-verified against the z0 gauge draw in
+    ``03_untested-components`` and ``17_more_components``::
+
+        fill 0,0,w,h, LOAD(bco)
+        zhizhen w/2+0, h/2+0, w/2,
+                LOAD(val)+LOAD(format), LOAD(wid), LOAD(pco),
+                LOAD(pco2), LOAD(hig), 0,0,0,0,0
+
+    The gauge LOADs records the editor allocates contiguously after the
+    named ``val`` / ``pco`` records (``format = val+1``, ``pco2 = pco+1``,
+    ``hig = pco+2``) — those slots exist even though their binattinf record
+    is an unwritten 0, so they are NOT in ``PER_LEI_LAYOUT`` and are reached
+    by sibling-offset here.  The two ``+0`` center offsets and the trailing
+    ``0,0,0,0,0`` are editor-inlined literals.
+    """
+    x, y, w, h = comp.x, comp.y, comp.w, comp.h
+    fill_head = OPCODE["fill"]
+    z_head = _OP_ZHIZHEN
+    if opcode_override:
+        fill_head = opcode_override.get("fill", fill_head)
+        z_head = opcode_override.get("zhizhen", z_head)
+
+    val = attr_addr("val")
+    pco = attr_addr("pco")
+    fill = (fill_head + b"0,0," + str(w).encode() + b","
+            + str(h).encode() + b"," + _load_op(attr_addr("bco")))
+    gauge = (z_head
+             + str(w).encode() + b"/2+0,"
+             + str(h).encode() + b"/2+0,"
+             + str(w).encode() + b"/2,"
+             + _load_op(val) + b"+" + _load_op(val + 1) + b","   # val + format
+             + _load_op(attr_addr("wid")) + b","
+             + _load_op(pco) + b","
+             + _load_op(pco + 1) + b","                          # pco2
+             + _load_op(pco + 2) + b","                          # hig
+             + b"0,0,0,0,0")
+    out = bytearray()
+    for body in (fill, gauge):
+        out += struct.pack("<I", len(body)) + body
+    return bytes(out)
+
+
 # -- Public API -----------------------------------------------------
 
 @dataclass
@@ -1009,6 +1076,8 @@ def encode_init_block(
         return _encode_checkbox_init(comp, attr_addr, opcode_override=opcode_override)
     if label == "radiobutton":
         return _encode_radio_init(comp, attr_addr, opcode_override=opcode_override)
+    if label == "zhizhen":
+        return _encode_zhizhen_init(comp, attr_addr, opcode_override=opcode_override)
 
     templates = ref_templates(comp.comp_type, comp.attrs)
     if not templates:
