@@ -19,6 +19,8 @@ Subcommands
   extract-pages Extract resource entries / RGB565 images from a TFT.
   preview       Render HMI pages to PNG previews.
   regen-schemas Regenerate lib/tft_attrs_schemas.py from findings/attrs-raw.txt.
+  compile       Compile an HMI into a TFT (HMI->TFT compiler; byte-identical).
+  author        From-scratch author: project IR (YAML/JSON) -> .tft + main.HMI.
 
 Unsafe / experimental subcommands (hardware-invalid TFT splices; see me/nextion#1 #3):
   --unsafe add-hotspot-hmi   Add a Hotspot to an HMI page (old template approach;
@@ -182,6 +184,22 @@ def _cmd_preview(args: argparse.Namespace) -> int:
 def _cmd_regen_schemas(args: argparse.Namespace) -> int:
     from scripts.tools.regen_attrs_schemas import main as _main
     return _main()
+
+
+def _cmd_author(args: argparse.Namespace) -> int:
+    """Author a .tft + main.HMI pair from a from-scratch project IR.
+
+    Reconstructs the compiler's page models from the IR and drives the
+    identical byte-exact HMI→TFT pipeline (``compile_from_model``), then
+    emits the main.HMI manifest.  The fonts/pictures resources blob +
+    Modelcrc come from ``--resources`` / the IR's ``model_crc`` (out of
+    scope), consistent with ``nxt compile``.
+    """
+    from scripts.author import author
+    tft_path, hmi_path = author(args.input, args.resources, args.output)
+    print(f"authored {args.input} -> {tft_path} ({tft_path.stat().st_size} bytes) "
+          f"+ {hmi_path} ({hmi_path.stat().st_size} bytes)")
+    return 0
 
 
 def _cmd_compile(args: argparse.Namespace) -> int:
@@ -405,6 +423,21 @@ def build_parser() -> argparse.ArgumentParser:
                         "directory and all project content are generated from "
                         "the HMI.")
 
+    # ---- author ------------------------------------------------------------
+    p = sub.add_parser("author",
+                       help="From-scratch author: project IR (YAML/JSON) -> "
+                            ".tft + main.HMI pair.")
+    p.add_argument("input", help="project IR (.yaml/.yml/.json).")
+    p.add_argument("-o", "--output", required=True,
+                   help="output path prefix (writes <prefix>.tft and <prefix>.HMI).")
+    p.add_argument("--resources",
+                   default=str(REPO_ROOT / "source" / "nextion.hmi.tft"),
+                   help="A reference .tft of the same model/font composition; "
+                        "its resources prefix [0..strdataaddr) (H1 framing + "
+                        "the out-of-scope fonts/pictures blob) and the "
+                        "resources-coupled appinf1 fields are reused. All "
+                        "project content is generated from the IR.")
+
     # ---- unsafe subcommands ------------------------------------------------
     p = sub.add_parser("add-hotspot-hmi",
                        help="[UNSAFE] Add a Hotspot to an HMI page using the old "
@@ -468,6 +501,7 @@ _DISPATCH = {
     "preview":        _cmd_preview,
     "regen-schemas":  _cmd_regen_schemas,
     "compile":        _cmd_compile,
+    "author":         _cmd_author,
     # unsafe:
     "add-hotspot-hmi": _unsafe_add_hotspot_hmi,
     "add-hotspot-tft": _unsafe_add_hotspot_tft,

@@ -358,6 +358,30 @@ def compile_hmi(hmi_path, resources_source) -> bytes:
     ``resources_source`` are the resources-coupled ones (resources_size,
     picxinxi/zimo offsets, picture/font descriptors).
     """
+    from sim.loader import load_hmi as _load_hmi_state
+
+    program_s = _load_hmi_state(str(hmi_path)).program_s
+    hmi = load_hmi_pages(hmi_path)
+    return compile_from_model(hmi, program_s, resources_source)
+
+
+def compile_from_model(hmi, program_s, resources_source) -> bytes:
+    """Compile already-loaded page models + ``Program.s`` into a ``.tft``.
+
+    This is the model-driven core of :func:`compile_hmi`; ``compile_hmi``
+    is the thin path-loading wrapper around it.  Splitting the parse out
+    lets a from-scratch author (``scripts/author.py``) reconstruct the
+    *identical* :class:`hmi_model.HmiPageModel` list from a project IR and
+    drive the exact same byte-exact assembly pipeline — so the IR round-trip
+    inherits the compiler's byte-for-byte guarantee for free.
+
+    ``hmi`` is a list of :class:`hmi_model.HmiPageModel` (device-id ordered,
+    page pseudo-component prepended) — exactly what
+    :func:`hmi_model.load_hmi_pages` returns.  ``program_s`` is the raw
+    ``Program.s`` text.  ``resources_source`` is the reference ``.tft``
+    (resources prefix + resources-coupled appinf1 fields + editor-version
+    profile/scratch), identical to :func:`compile_hmi`.
+    """
     from pathlib import Path
     from scripts.lib.objxinxi_encoder import (
         encode_objxinxi_entry, ObjxinxiInputs,
@@ -367,7 +391,6 @@ def compile_hmi(hmi_path, resources_source) -> bytes:
     from scripts.lib import tft_format
     from scripts.lib.page_crc import crc32_bytewise
     from scripts.lib.hmi_model import parse_program_globals
-    from sim.loader import load_hmi as _load_hmi_state
 
     from scripts.lib.compiler_profile import profile_for, project_scratch_for
     from scripts.lib.tft_attrs import parse_appinf1_corrected
@@ -376,8 +399,6 @@ def compile_hmi(hmi_path, resources_source) -> bytes:
     data = Path(resources_source).read_bytes()
     model_crc = int.from_bytes(data[0x2E:0x32], "little")
 
-    program_s = _load_hmi_state(str(hmi_path)).program_s
-    hmi = load_hmi_pages(hmi_path)
     app_allvas_qty = len(parse_program_globals(program_s))
 
     # Editor-version constants come from the reference TFT's H1 version
@@ -501,5 +522,6 @@ def compile_hmi(hmi_path, resources_source) -> bytes:
 __all__ = [
     "assemble_usercode_and_layout",
     "compile_hmi",
+    "compile_from_model",
     "ObjxinxiLayout",
 ]
