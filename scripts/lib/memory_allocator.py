@@ -236,11 +236,23 @@ ATTPOSUP_TABLE: Dict[int, Dict[str, int]] = {
 #   * ``>= 65535`` → "stored in a separate memory region"
 #     (typically Sstr/molloc indirection)
 #
-# UNVERIFIED against a byte-checked F-series fixture.  All entries below
-# come from IL inspection alone.  The Slider entry (val=10) matches the
-# previously-noted ``h0.memorypos + 10 = 0x454`` reference in
-# ``findings/memory-allocation.md`` § "Worked example — project page 0";
-# the rest are IL-only.
+# BYTE-VERIFICATION STATUS (2026-06, against the binattinf datafrom records
+# in source/nextion.hmi.tft, 17_more_components/17.tft and
+# 03_untested-components/untested.tft — each datafrom attr's
+# ``attmemorypos == objdatarampos + attposup``, so the record byte-locks the
+# attposup).  See tests/sim/test_attposup_table_t1.py.
+#   * VERIFIED scalar entries for LEIs that appear in a fixture:
+#       0 (Curve/Waveform), 1 (Slider), 51 (Timer), 52 (Vari), 53 (Button_T),
+#       54 (Number), 55 (GText), 56 (CheckBox), 57 (Radio), 58 (Qrcode),
+#       59 (XFloat), 98 (Button), 106 (Prog), 112 (Pic), 113 (Picc),
+#       116 (Text), 121 (Page), 122 (Zhizhen).
+#   * CORRECTED from the raw IL value: GText(55) txt 20→72 and Qrcode(58)
+#     txt 12→100 — the txt buffer is a spilled Sstr in the long-attr tail
+#     (its binattinf attmemorypos is odrp+72 / odrp+100, not the in-struct
+#     field offset the IL branch reports).
+#   * STILL IL-ONLY (no fixture exercises the class): Touchcap(5).
+# The Slider entry (val=10) also matches the ``h0.memorypos + 10 = 0x454``
+# reference in ``findings/memory-allocation.md`` § "Worked example".
 # ---------------------------------------------------------------------------
 
 ATTPOSUP_TABLE_T1: Dict[int, Dict[str, int]] = {
@@ -318,7 +330,13 @@ ATTPOSUP_TABLE_T1: Dict[int, Dict[str, int]] = {
         "tim":     14,
         "en":      16,
         "txt_maxl": 18,
-        "txt":     20,
+        # txt is a spilled Sstr: its attmemorypos lives PAST the struct
+        # block, at objdatarampos+72 (NOT the IL-listed in-struct +20).
+        # BYTE-VERIFIED against 03_untested-components/untested.tft g0
+        # (binattinf attmemorypos = odrp 240 + 72 = 312); the +20 the IL
+        # branch reports is the in-struct field, but the editor stores the
+        # txt buffer in the long-attr tail.
+        "txt":     72,
         "isbr":    24,
         "spax":    25,
         "spay":    26,
@@ -344,7 +362,11 @@ ATTPOSUP_TABLE_T1: Dict[int, Dict[str, int]] = {
         "pco":      4,
         "pic":      6,
         "txt_maxl": 8,
-        "txt":     12,
+        # txt is a spilled Sstr: BYTE-VERIFIED at objdatarampos+100 against
+        # 03_untested-components/untested.tft qr0 (binattinf attmemorypos =
+        # odrp 180 + 100 = 280).  The IL-listed in-struct +12 is the struct
+        # field; the buffer itself lives in the long-attr tail.
+        "txt":    100,
     },
     59: {  # XFloat — GuiObjXfloat
         # key = -1 → omitted.
@@ -626,9 +648,14 @@ if __name__ == "__main__":
         assert lei in SIZEOF_OBJDATA_T1, (
             f"LEI {lei} has attposup but no SIZEOF_OBJDATA_T1 entry"
         )
-        # Every attribute offset must be < block size.
+        # Every scalar attribute offset must be < block size.  Exception:
+        # a spilled Sstr `txt` (GText 55, Qrcode 58) is stored in the
+        # long-attr tail PAST the struct block, so its byte-verified
+        # attposup deliberately exceeds SIZEOF (72 > 36, 100 > 16).
         sz = SIZEOF_OBJDATA_T1[lei]
         for attr, off in ATTPOSUP_TABLE_T1[lei].items():
+            if attr == "txt" and off >= sz:
+                continue  # spilled Sstr — lives in the long-attr tail
             assert 0 <= off < sz, (
                 f"LEI {lei} attr {attr!r} offset {off} out of block "
                 f"size {sz}"

@@ -175,6 +175,30 @@ def negate_comparator(endid: int) -> int:
 _CONDITION_SPLIT_RE = re.compile(r"(==|!=|<=|>=|<|>|&&|\|\|)")
 
 
+def condition_connector(cond: str) -> str | None:
+    """Return the logical connector that joins a multi-clause condition:
+    ``"&&"`` (logical-AND), ``"||"`` (logical-OR), or ``None`` for a
+    single-clause condition.
+
+    A condition that mixes ``&&`` and ``||`` raises — the editor's
+    ``chonggouifwhile`` (see findings/script-control-flow.md) only accepts a
+    uniform connector (each clause's separator must equal the previous one or
+    be the closing paren), so mixed connectors are not representable in one
+    cjmp chain.
+    """
+    seps = re.findall(r"&&|\|\|", cond)
+    if not seps:
+        return None
+    uniq = set(seps)
+    if uniq == {"&&"}:
+        return "&&"
+    if uniq == {"||"}:
+        return "||"
+    raise ValueError(
+        f"mixed &&/|| connectors in one condition are not supported: {cond!r}"
+    )
+
+
 def split_condition(cond: str) -> list[tuple[str, str, int]]:
     """Parse a condition into a list of `(lhs, rhs, comparator_endid)`
     triples, one per comparison clause.
@@ -212,6 +236,11 @@ class IfFrame:
     chain_jmps: list[int] = field(default_factory=list)
     # ↑ for if-elseif-else chains: jmp-over slots that need patching at
     # the chain's final `}`. The innermost (current) frame holds them.
+    and_slots: list[int] = field(default_factory=list)
+    # ↑ for an && (logical-AND) condition: the EARLY clauses' cjmp slots.
+    # Every && clause skips to the same destination as the final cjmp
+    # (frame.ListIndex) — body-skip on `}`, or the else-branch start on
+    # `}else`/`}else if`. Patched in lock-step with ListIndex.
 
 
 def emit_cjmp(lhs_bytes: bytes, rhs_bytes: bytes, endid: int,
@@ -301,13 +330,32 @@ def emit_if_chain(clauses: list[tuple[str, str, int]],
                   ifstack: list[IfFrame],
                   resolve_atom_expr: Callable[[str], bytes],
                   cjmp_template_ref: list[bytes | None],
-                  frame_in: IfFrame | None = None) -> None:
-    """Emit cjmps for a multi-clause condition. All but the last clause
-    are negated (per `getfanyiif`) and given an entry-distance target
-    pointing to body-start. The last clause keeps its natural comparator
-    and a placeholder target (patched at `}`).
+                  frame_in: IfFrame | None = None,
+                  connector: str | None = None) -> None:
+    """Emit cjmps for a multi-clause condition.
+
+    ``connector`` selects the multi-clause lowering:
+
+    - ``"||"`` / ``None`` (logical-OR, the default — VERIFIED against the
+      16_loop ``||`` chain): all but the last clause are NEGATED (per
+      ``getfanyiif``) and target body-start; if any negated clause's test
+      holds, control falls through into the body. The last clause keeps its
+      natural comparator and a placeholder target patched at ``}`` to skip
+      the body.
+
+    - ``"&&"`` (logical-AND — IL-DERIVED, UNVERIFIED; no ``&&`` fixture
+      exists in the corpus). Every clause keeps its natural (un-negated)
+      comparator and targets "skip past the body", so the body runs only when
+      ALL clauses hold. Relies on the VM's "cjmp jumps when the condition
+      FAILS" semantics: ``cjmp(a, skip); cjmp(b, skip); body`` short-circuits
+      out of the body the moment any clause fails. The last clause carries the
+      placeholder patched at ``}``; the earlier ones are patched alongside it
+      via the frame's ``chain_jmps`` so every clause lands on the same
+      skip-body target.
     """
     n = len(clauses)
+    and_chain = (connector == "&&" and n > 1)
+    early_and_slots: list[int] = []
     for i, (lhs, rhs, endid) in enumerate(clauses):
         is_last = (i == n - 1)
         # LHS and RHS may be either bare atoms or full sub-expressions
@@ -317,8 +365,13 @@ def emit_if_chain(clauses: list[tuple[str, str, int]],
         rhs_b = compile_expression(rhs, resolve_atom_expr)
         if is_last:
             entry = emit_cjmp(lhs_b, rhs_b, endid, placeholder_int=0)
+        elif and_chain:
+            # &&: un-negated, target skip-past-body. Placeholder patched at
+            # `}` (the slot is recorded in the frame's chain_jmps).
+            entry = emit_cjmp(lhs_b, rhs_b, endid, placeholder_int=0)
+            early_and_slots.append(len(cglist))
         else:
-            # Early clause: negate, target body-start (n - 1 - i entries ahead).
+            # ||: negate, target body-start (n - 1 - i entries ahead).
             neg_endid = negate_comparator(endid)
             entry = emit_cjmp(lhs_b, rhs_b, neg_endid, placeholder_int=n - 1 - i)
         cglist.append(entry)
@@ -328,6 +381,11 @@ def emit_if_chain(clauses: list[tuple[str, str, int]],
     frame = frame_in or IfFrame()
     frame.Lei = "if"
     frame.ListIndex = len(cglist) - 1   # the LAST clause's cjmp
+    # For an && chain, the early clauses' branch targets are patched in
+    # lock-step with the final cjmp (frame.ListIndex) — both land on the
+    # body-skip destination (`}`) or the else-branch start (`}else`).
+    if and_chain:
+        frame.and_slots = list(early_and_slots)
     ifstack.append(frame)
 
 
@@ -360,6 +418,11 @@ def patch_close(cglist: list[bytes], ifstack: list[IfFrame],
         entry_distance = (len(cglist) - 1) - cjmp_slot
         cglist[cjmp_slot] = cglist[cjmp_slot][:-4] + struct.pack("<i", entry_distance)
 
+    # && early clauses skip to the same body-skip point as the final cjmp.
+    for and_slot in frame.and_slots:
+        entry_distance = (len(cglist) - 1) - and_slot
+        cglist[and_slot] = cglist[and_slot][:-4] + struct.pack("<i", entry_distance)
+
     # Patch any accumulated chain jmps (from sibling `else if` / `else`
     # branches). They should all jump to the same point: just past the
     # current end of cglist (= after the last body's bytes).
@@ -373,8 +436,8 @@ def patch_close_with_else(cglist: list[bytes], ifstack: list[IfFrame],
                           kind: str,
                           new_clauses: list[tuple[str, str, int]] | None = None,
                           resolve_atom_expr: Callable[[str], bytes] | None = None,
-                          cjmp_template_ref: list[bytes | None] | None = None
-                          ) -> None:
+                          cjmp_template_ref: list[bytes | None] | None = None,
+                          connector: str | None = None) -> None:
     """Handle `}else` and `}else if(...)`.
 
     1. Emit a forward jmp at the end of the current if's body (the
@@ -397,6 +460,12 @@ def patch_close_with_else(cglist: list[bytes], ifstack: list[IfFrame],
     entry_distance = (len(cglist) - 1) - cjmp_slot
     cglist[cjmp_slot] = cglist[cjmp_slot][:-4] + struct.pack("<i", entry_distance)
 
+    # An && condition's early clauses also skip to the new body start (the
+    # whole AND fails as a unit, so every clause jumps to the else branch).
+    for and_slot in frame.and_slots:
+        ed = (len(cglist) - 1) - and_slot
+        cglist[and_slot] = cglist[and_slot][:-4] + struct.pack("<i", ed)
+
     # Carry forward the chain_jmps list, appending the new jmp-over.
     chain = list(frame.chain_jmps)
     chain.append(jmp_slot)
@@ -411,9 +480,10 @@ def patch_close_with_else(cglist: list[bytes], ifstack: list[IfFrame],
         # Emit the new condition's cjmps. They form a new frame on top
         # of the stack; we transplant the carried chain_jmps onto that
         # new frame so they all get patched together at the chain's
-        # final `}`.
+        # final `}`. The new clause may itself be an && chain (its own
+        # early-clause and_slots are tracked on the new frame).
         emit_if_chain(new_clauses, cglist, ifstack, resolve_atom_expr,
-                      cjmp_template_ref)
+                      cjmp_template_ref, connector=connector)
         # The new frame is now on top of ifstack — adopt the chain.
         ifstack[-1].chain_jmps = chain
     else:
@@ -547,7 +617,7 @@ def _self_test() -> None:
     OFFSETS["org.val"] = 0x3b2
     OFFSETS["grn.val"] = 0x3bd
     with open(Path(__file__).resolve().parents[2] /
-              "tests" / "editor outputs" / "16_loop" / "16.tft", "rb") as f:
+              "tests" / "editor outputs" / "_old" / "16_loop" / "16.tft", "rb") as f:
         tft = f.read()
     expected_flat = tft[0x70fec:0x710cb]
 

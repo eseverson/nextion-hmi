@@ -436,8 +436,34 @@ def ref_templates(comp_type: int, attrs: dict) -> list[tuple]:
                     ('attr', 'bco'),
                 ]),
             ]
-        # vertical / other styles: see findings doc
-        return [('comment', [('lit', '# prog dir!=0: see findings doc')])]
+        if dir_ == 1:
+            # Vertical fill, no picture (sta=0). IL-DERIVED, UNVERIFIED — no
+            # dir!=0 ProgressBar fixture exists. From hmitype.dll Getatt_Codes
+            # IL_3805 (the `'&val&'*'&h&'/100` vertical branch):
+            #   sya0 = val * <h> / 100
+            #   fill x, endy+1-sya0, w, sya0, pco   (filled, grows from bottom)
+            #   fill x, y, w, h-sya0, bco           (background)
+            return [
+                ('assign', [('sysvar', 'sya0'), ('lit', '=')]
+                 + [('attr', 'val'), ('lit', '*'),
+                    ('coord', 'h'), ('lit', '/100')]),
+                ('fill', [
+                    ('coord', 'x'), ('lit', ','),
+                    ('expr', (('coord', 'endy'), '+', '1', '-', 'sya0')), ('lit', ','),
+                    ('coord', 'w'), ('lit', ','),
+                    ('sysvar', 'sya0'), ('lit', ','),
+                    ('attr', 'pco'),
+                ]),
+                ('fill', [
+                    ('coord', 'x'), ('lit', ','),
+                    ('coord', 'y'), ('lit', ','),
+                    ('coord', 'w'), ('lit', ','),
+                    ('expr', (('coord', 'h'), '-', 'sya0')), ('lit', ','),
+                    ('attr', 'bco'),
+                ]),
+            ]
+        # dir in {2,3} (picture-fill variants) — see findings doc.
+        return [('comment', [('lit', '# prog dir in {2,3}: see findings doc')])]
 
     if label == "timer":
         # timer Ref doesn't render — the timer event template is:
@@ -467,12 +493,21 @@ def _setbrush_buttoncolours(*, pressed: bool, sta: int, style: int = 0,
     in the editor's attribute schema.  pw is also -1 for these types,
     so it is always emitted as a literal ``'0'`` here.
 
-    ``style`` controls the setbrush trailing (arg 14):
-      * sta=1, style=4 → trailing="1" (the style=4 case adds a draw3d
-        bevel; the editor still emits trailing=1 even though it is
-        unused by the render path for this style — verified against
-        the b0 / b0_t blocks in 17_more_components/17.tft).
-      * Otherwise → trailing="0".
+    ``style`` controls the setbrush trailing (arg 15, the ``loc0`` token the
+    editor appends after the ``…,0,`` template).  Mirrors the ``Getatt_Codes``
+    sta=1 dispatch (hmitype.dll IL_0182–IL_0210, see
+    findings/init-bytecode-encoder.md):
+
+      * sta=1, style=1     → trailing = the **borderw value** inlined as ASCII
+        (borderw has ``attposup == -1`` in the F-series schema — a
+        compile-time constant baked into the bytecode, NOT a ``LOAD``).
+        IL-DERIVED, UNVERIFIED — no style=1 button fixture exists.
+      * sta=1, style∈{2,3,4} → trailing = literal ``"1"``.  style=4 is
+        VERIFIED against the b0 / b0_t blocks in 17_more_components/17.tft;
+        style∈{2,3} share the same IL branch (IL_01d7) but are UNVERIFIED.
+      * Any other sta/style → trailing = literal ``"0"`` (the editor omits
+        ``loc0`` for the non-bordered templates; the encoder keeps a single
+        ``0`` slot so the block stays well-formed).
     """
     color_pair = ('pco2', 'picc2') if pressed else ('pco', 'picc')
     # picc/picc2 aliases bco/bco2/pic/pic2 — all share +6/+8 in
@@ -481,7 +516,13 @@ def _setbrush_buttoncolours(*, pressed: bool, sta: int, style: int = 0,
     # operand decoding in `17_more_components/17.tft` b0 / b0_t.)
     spax_arg = ('inline_attr', 'spax') if inline_spax_spay else ('attr', 'spax')
     spay_arg = ('inline_attr', 'spay') if inline_spax_spay else ('attr', 'spay')
-    trailing = '1' if (sta == 1 and style == 4) else '0'
+    if sta == 1 and style == 1:
+        # borderw value inlined as ASCII (attposup -1, not a LOAD).
+        trailing_arg = ('inline_attr', 'borderw')
+    elif sta == 1 and style in (2, 3, 4):
+        trailing_arg = ('lit', '1')
+    else:
+        trailing_arg = ('lit', '0')
     return ('setbrush', [
         ('coord', 'x'), ('lit', ','),
         ('coord', 'y'), ('lit', ','),
@@ -497,7 +538,7 @@ def _setbrush_buttoncolours(*, pressed: bool, sta: int, style: int = 0,
         spax_arg, ('lit', ','),
         spay_arg, ('lit', ','),
         ('lit', '0'), ('lit', ','),
-        ('lit', trailing),
+        trailing_arg,
     ])
 
 
@@ -597,6 +638,8 @@ def _resolve_coord(name: str, x, y, w, h, comp_id, page_id, attrs) -> str:
     if name == 'y': return str(y)
     if name == 'w': return str(w)
     if name == 'h': return str(h)
+    if name == 'endx': return str(x + w - 1)
+    if name == 'endy': return str(y + h - 1)
     if name == 'id': return str(comp_id)
     if name == 'pageid': return str(page_id)
     # Otherwise look up from attrs as a literal
@@ -771,6 +814,151 @@ def _encode_button_init(
     return flatten_cglist(cglist)
 
 
+# -- Checkbox / Radio control-flow encoders -------------------------
+
+# Scratch-sysvar operands used by the checkbox/radio templates. sya0 is the
+# size-4 sysvar at index 5; checkbox's sya1 is at index 8 (NOT 7 — byte-
+# verified against 03_untested-components/untested.tft c0). The earlier
+# SYSVAR_OPERANDS sya1=7 entry was never exercised by a fixture.
+_SYA0 = bytes((0x04, 0x04, 0x05, 0x00, 0x00))
+_SYA1 = bytes((0x04, 0x04, 0x08, 0x00, 0x00))
+
+# size-4 circle opcodes in the 'D' build (byte-verified vs untested.tft r0):
+_OP_CIRS = bytes((0x09, 0x18, 0x04))   # solid circle
+_OP_CIR  = bytes((0x09, 0x04, 0x04))   # circle outline
+# checkbox bevel border colours (raised), same pair the button draw3d uses.
+_DRAW3D_RAISED = (16936, 59164)
+
+
+def _encode_checkbox_init(
+    comp: "Component",
+    attr_addr: Callable[[str], int],
+    opcode_override: dict | None = None,
+) -> bytes:
+    """Encode the Checkbox (lei 56) Ref event.
+
+    Source template (hmitype.dll Getatt_Codes IL_14b0–IL_1563)::
+
+        sya0 = w / 4
+        sya1 = w - sya0 - sya0
+        fill x, y, w, h, bco
+        if(val == 1) { fill x+sya0, y+sya0, sya1, sya1, pco }
+
+    plus a trailing bevel ``draw3d x,y,w,h,16936,59164,1`` border (the
+    shared styled-border suffix; present whenever the checkbox carries a
+    border style).
+
+    VERIFIED byte-for-byte against ``03_untested-components/untested.tft``
+    c0 (page 3, x=y=0, w=h=20, val=1, style=2).
+    """
+    x, y, w, h = comp.x, comp.y, comp.w, comp.h
+
+    def fill(args: list) -> bytes:
+        head = OPCODE["fill"]
+        if opcode_override and "fill" in opcode_override:
+            head = opcode_override["fill"]
+        return head + b"".join(args)
+
+    # sya0 = w / 4  (no opcode head; the sysvar operand IS the entry start)
+    sya0_assign = _SYA0 + b"=" + str(w).encode() + b"/4"
+    # sya1 = w - sya0 - sya0
+    sya1_assign = _SYA1 + b"=" + str(w).encode() + b"-" + _SYA0 + b"-" + _SYA0
+    # fill x,y,w,h,bco
+    fill_bg = fill([
+        str(x).encode(), b",", str(y).encode(), b",",
+        str(w).encode(), b",", str(h).encode(), b",",
+        _load_op(attr_addr("bco")),
+    ])
+    # cjmp(val == 1) — un-negated; jumps past the if-body when val != 1.
+    cjmp = emit_cjmp(_load_op(attr_addr("val")), b"1",
+                     COMPARATOR_ENDID["=="], placeholder_int=1)
+    # fill x+sya0, y+sya0, sya1, sya1, pco
+    fill_fg = fill([
+        str(x).encode(), b"+", _SYA0, b",",
+        str(y).encode(), b"+", _SYA0, b",",
+        _SYA1, b",", _SYA1, b",",
+        _load_op(attr_addr("pco")),
+    ])
+    cglist = [sya0_assign, sya1_assign, fill_bg, cjmp, fill_fg]
+    convert_entry_to_byte_distances(cglist, cjmp[:3])
+
+    # Trailing bevel border (draw3d) — outside the if, runs unconditionally.
+    d3d_head = OPCODE["draw3d"]
+    if opcode_override and "draw3d" in opcode_override:
+        d3d_head = opcode_override["draw3d"]
+    c1, c2 = _DRAW3D_RAISED
+    draw3d = (d3d_head
+              + str(x).encode() + b"," + str(y).encode() + b","
+              + str(w).encode() + b"," + str(h).encode() + b","
+              + _long_lit(c1) + b"," + _long_lit(c2) + b"," + b"1")
+    cglist.append(draw3d)
+
+    return flatten_cglist(cglist)
+
+
+def _encode_radio_init(
+    comp: "Component",
+    attr_addr: Callable[[str], int],
+    opcode_override: dict | None = None,
+) -> bytes:
+    """Encode the RadioButton (lei 57) Ref event.
+
+    Source template (hmitype.dll Getatt_Codes IL_177c–IL_18xx)::
+
+        sya0 = w & 1
+        if(sya0 == 0) { sya0 = w/2 - 1 } else { sya0 = w/2 }
+        cirs x+sya0, y+sya0, sya0, bco
+        cir  x+sya0, y+sya0, sya0, 16936
+        if(val == 1) { cirs x+sya0, y+sya0, sya0/2, pco }
+
+    VERIFIED byte-for-byte against ``03_untested-components/untested.tft``
+    r0 (page 3, x=y=0, w=h=20, val=1).  Note the circle opcodes in the 'D'
+    build are ``cirs = 09 18 04`` / ``cir = 09 04 04``.
+    """
+    x, y, w, h = comp.x, comp.y, comp.w, comp.h
+
+    cirs_head = _OP_CIRS
+    cir_head = _OP_CIR
+    if opcode_override:
+        cirs_head = opcode_override.get("cirs", cirs_head)
+        cir_head = opcode_override.get("cir", cir_head)
+
+    # sya0 = w & 1
+    sya0_and = _SYA0 + b"=" + str(w).encode() + b"&1"
+    # cjmp(sya0 == 0) — un-negated; jumps to else (the w/2 branch) on fail.
+    cjmp0 = emit_cjmp(_SYA0, b"0", COMPARATOR_ENDID["=="], placeholder_int=2)
+    # then-body: sya0 = w/2 - 1
+    sya0_then = _SYA0 + b"=" + str(w).encode() + b"/2-1"
+    # jmp over else
+    jmp_over = emit_jmp(1)
+    # else-body: sya0 = w/2
+    sya0_else = _SYA0 + b"=" + str(w).encode() + b"/2"
+    # cirs x+sya0, y+sya0, sya0, bco
+    cirs_outer = (cirs_head
+                  + str(x).encode() + b"+" + _SYA0 + b","
+                  + str(y).encode() + b"+" + _SYA0 + b","
+                  + _SYA0 + b"," + _load_op(attr_addr("bco")))
+    # cir x+sya0, y+sya0, sya0, 16936
+    cir_ring = (cir_head
+                + str(x).encode() + b"+" + _SYA0 + b","
+                + str(y).encode() + b"+" + _SYA0 + b","
+                + _SYA0 + b"," + _long_lit(16936))
+    # cjmp(val == 1) — un-negated; jumps past the inner cirs on fail.
+    cjmp_val = emit_cjmp(_load_op(attr_addr("val")), b"1",
+                         COMPARATOR_ENDID["=="], placeholder_int=1)
+    # inner cirs x+sya0, y+sya0, sya0/2, pco
+    cirs_inner = (cirs_head
+                  + str(x).encode() + b"+" + _SYA0 + b","
+                  + str(y).encode() + b"+" + _SYA0 + b","
+                  + _SYA0 + b"/2," + _load_op(attr_addr("pco")))
+
+    cglist = [sya0_and, cjmp0, sya0_then, jmp_over, sya0_else,
+              cirs_outer, cir_ring, cjmp_val, cirs_inner]
+    # Two cjmps share the same 3-byte head; convert handles both.
+    convert_entry_to_byte_distances(cglist, cjmp0[:3])
+    return flatten_cglist(cglist)
+
+
 # -- Public API -----------------------------------------------------
 
 @dataclass
@@ -810,6 +998,10 @@ def encode_init_block(
     label = TYPE_LABELS.get(comp.comp_type, "")
     if label in ("button", "button_t"):
         return _encode_button_init(comp, attr_addr, opcode_override=opcode_override)
+    if label == "checkbox":
+        return _encode_checkbox_init(comp, attr_addr, opcode_override=opcode_override)
+    if label == "radiobutton":
+        return _encode_radio_init(comp, attr_addr, opcode_override=opcode_override)
 
     templates = ref_templates(comp.comp_type, comp.attrs)
     if not templates:
@@ -829,6 +1021,49 @@ def encode_init_block(
             # whose Ref event contains control flow.
             continue
         out += struct.pack("<I", len(body)) + body
+    return bytes(out)
+
+
+# GText scroll-init opcode (size-8). Arms the scrolling motion handler;
+# emitted by the firmware's GuiGTextObjInit, NOT by a Getatt_Codes template.
+OPCODE_SCROLL_INIT = bytes((0x09, 0x24, 0x08))
+
+
+def encode_gtext_scroll_blocks(
+    attr_addr: Callable[[str], int],
+    motion_label_addr: int,
+) -> bytes:
+    """Emit GText's two trailing secondary blocks that arm scrolling.
+
+    These follow the Ref event's setbrush + zstr blocks (see
+    :func:`encode_init_block`) but are NOT part of the Ref event — they
+    belong to GText's slide/motion event chain, generated by the firmware's
+    ``GuiGTextObjInit`` rather than by a ``Getatt_Codes`` source template:
+
+      1. ``09 24 08 LOAD(en), 2, LOAD(tim), 0`` — the scroll-init call:
+         scroll-enable flag, a literal ``2``, the scroll timer interval, and
+         a literal ``0``.
+      2. ``4c 20 03 <motion_label_addr>`` — the ``L`` motion-handler jump
+         marker.  Its address is a global label-table ``biaoji`` key the
+         editor assigns at output time (like the suspend/resume ``S`` marker
+         and the loop ``L`` markers — see
+         :func:`script_compiler_extras.emit_label_marker`).  It is NOT
+         derivable from project content, so the caller must supply the
+         value captured from the reference TFT.
+
+    VERIFIED byte-for-byte against ``17_more_components/17.tft`` g0 page 3
+    (the ``en``/``tim`` operands + the ``L`` addr 0x2476).  Note the ``L``
+    addr is the only non-content-derivable input.
+    """
+    scroll = (OPCODE_SCROLL_INIT
+              + _load_op(attr_addr("en")) + b"\x2c"
+              + b"2" + b"\x2c"
+              + _load_op(attr_addr("tim")) + b"\x2c"
+              + b"0")
+    motion = b"\x4c\x20\x03" + struct.pack("<I", motion_label_addr)
+    out = bytearray()
+    out += struct.pack("<I", len(scroll)) + scroll
+    out += struct.pack("<I", len(motion)) + motion
     return bytes(out)
 
 

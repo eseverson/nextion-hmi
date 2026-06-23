@@ -385,7 +385,7 @@ def compile_event_handler(source: str, ctx: CompileContext | None = None) -> byt
         - Multi-operand arithmetic: ``x0.val = x1.val + x2.val - 10``
     """
     from script_compiler_extras import (
-        compile_expression, split_condition,
+        compile_expression, split_condition, condition_connector,
         emit_if_chain, patch_close, patch_close_with_else,
         convert_entry_to_byte_distances, flatten_cglist,
         IfFrame,
@@ -416,17 +416,21 @@ def compile_event_handler(source: str, ctx: CompileContext | None = None) -> byt
         # --- control-flow dispatch -----------------------------------------
         m = _IF_RE.match(line)
         if m:
-            clauses = split_condition(m.group(1).strip())
-            emit_if_chain(clauses, cglist, ifstack, resolve, cjmp_template_ref)
+            cond = m.group(1).strip()
+            clauses = split_condition(cond)
+            emit_if_chain(clauses, cglist, ifstack, resolve, cjmp_template_ref,
+                          connector=condition_connector(cond))
             continue
 
         m = _ELIF_RE.match(line)
         if m:
-            clauses = split_condition(m.group(1).strip())
+            cond = m.group(1).strip()
+            clauses = split_condition(cond)
             patch_close_with_else(cglist, ifstack, "else if",
                                   new_clauses=clauses,
                                   resolve_atom_expr=resolve,
-                                  cjmp_template_ref=cjmp_template_ref)
+                                  cjmp_template_ref=cjmp_template_ref,
+                                  connector=condition_connector(cond))
             continue
 
         if _ELSE_RE.match(line):
@@ -439,11 +443,13 @@ def compile_event_handler(source: str, ctx: CompileContext | None = None) -> byt
 
         m = _WHILE_RE.match(line)
         if m:
+            cond = m.group(1).strip()
             slot = len(cglist)
             frame = IfFrame(Lei="if", endstr=[f"T {slot}"])
-            clauses = split_condition(m.group(1).strip())
+            clauses = split_condition(cond)
             emit_if_chain(clauses, cglist, ifstack, resolve,
-                          cjmp_template_ref, frame_in=frame)
+                          cjmp_template_ref, frame_in=frame,
+                          connector=condition_connector(cond))
             continue
 
         m = _FOR_RE.match(line)
@@ -454,12 +460,31 @@ def compile_event_handler(source: str, ctx: CompileContext | None = None) -> byt
                 raise ValueError(f"for-loop header must have exactly two ';': {line!r}")
             init_s, cond_s, inc_s = (p.strip() for p in parts)
             if init_s:
-                cglist.append(compile_expression(init_s, resolve))
+                # `for(int i=0; ...)` — the init declares one or more loop
+                # variables. `compile_expression` can't tokenise the `int`
+                # keyword, so route an `int`-prefixed init through the
+                # declaration path: register each name as a global slot, then
+                # emit the `name=value` assignment for each initialiser that
+                # carries one (the init runs once at loop entry; see
+                # findings/script-control-flow.md worked example 3 — IL-derived,
+                # no `for` fixture in the corpus).
+                dm_init = _INT_DECL_RE.match(init_s)
+                if dm_init:
+                    _compile_statement(init_s, ctx)  # allocate globals, no bytes
+                    for decl in dm_init.group(1).split(","):
+                        decl = decl.strip()
+                        if "=" in decl:
+                            name, value = (s.strip() for s in decl.split("=", 1))
+                            cglist.append(
+                                compile_expression(f"{name}={value}", resolve))
+                else:
+                    cglist.append(compile_expression(init_s, resolve))
             slot = len(cglist)
             frame = IfFrame(Lei="for", endstr=[inc_s, f"T {slot}"])
             clauses = split_condition(cond_s)
             emit_if_chain(clauses, cglist, ifstack, resolve,
-                          cjmp_template_ref, frame_in=frame)
+                          cjmp_template_ref, frame_in=frame,
+                          connector=condition_connector(cond_s))
             continue
 
         # --- simple statements ---------------------------------------------

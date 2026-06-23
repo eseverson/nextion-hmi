@@ -530,9 +530,18 @@ allocator-driven resolution, and a 4-way elif cascade.
     16 bytes for Text, 11 bytes for Button/Button_T) are also part
     of the block. Byte-verified from page-2 objdatarampos strides in
     both fixtures; all 170 tests + init-encoder self-tests pass.
-  - **Still IL-only**: Curve(0), Touchcap(5), GText(55), CheckBox(56),
-    Radio(57), Qrcode(58), Pic(112), Picc(113), Zhizhen(122) attposup
-    entries not yet checked against a byte-decoded fixture.
+  - **BYTE-VERIFIED (2026-06, bytecode-breadth)**: Curve(0), GText(55),
+    CheckBox(56), Radio(57), Qrcode(58), Pic(112), Picc(113), Zhizhen(122)
+    `ATTPOSUP_TABLE_T1` scalar entries now byte-checked against the
+    `03_untested-components/untested.tft` error-page binattinf records (each
+    datafrom attr's `attmemorypos == objdatarampos + attposup`). Two raw-IL
+    values were **CORRECTED**: GText txt 20→72, Qrcode txt 12→100 — the txt
+    buffer is a spilled Sstr in the long-attr tail, so its attposup exceeds
+    the struct SIZEOF. Locked in `tests/sim/test_bytecode_breadth.py`
+    (`test_attposup_table_matches_verified_binattinf`,
+    `test_attposup_table_byte_verified_against_fixture`).
+    **Still IL-only**: Touchcap(5) — no fixture exercises it (single `val`
+    attr).
 - **Widen the round-trip corpus.** Current byte-verified pairs come
   from `16_loop` (if-else and while). The miata-dash Timer event
   source (in `nextion/work/hmi_text/main.txt`) and Hotspot Touch-Press
@@ -540,11 +549,13 @@ allocator-driven resolution, and a 4-way elif cascade.
   bytecode lives in `source/nextion.hmi.tft`, but locating it requires
   following the per-component event-handler sub-record chain (see
   [`format-bytecode.md`](format-bytecode.md)).
-- **`for` loop with `int` declaration in the init.** Editor source
-  like `for(int qq=0; qq<5; qq=qq+1)` runs the init through
-  `compile_expression`, which doesn't currently recognise `int` decls.
-  Detect and route `int`-prefixed inits to the global-declaration
-  path instead.
+- **`for` loop with `int` declaration in the init. DONE** (bytecode-breadth,
+  me/miata-dash#42). `compile_event_handler` now routes an `int`-prefixed
+  for-init through the declaration path: it registers each loop variable as a
+  global slot, then emits the `name=value` assignment for each initialiser
+  (the init runs once at loop entry). IL-DERIVED — no `for` fixture exists in
+  the corpus, so the lowering is locked as a golden snapshot in
+  `tests/sim/test_bytecode_breadth.py::test_for_int_init_il_derived_unverified`.
 
 ## 2. Finish the per-component init-bytecode encoder
 
@@ -572,22 +583,33 @@ is patched automatically when `build_component_records` is given an
 
 **What's left**:
 
-- **Other types with if-else templates** — Checkbox (lei 56), Radio
-  (57), Prog (106 dir=0 already, other dirs not yet) use sysvar
-  scratch (`sya0 = '&w&' / 4`) plus an inner `if(val==1){…}` body.
-  The script-bytecode compiler can already emit those source lines;
-  hooking them into the init encoder is mechanical once a byte-verified
-  fixture exists.
-- **`style != 4` button paths** — the encoder currently emits the
-  setbrush trailing as literal `'1'` only for `sta=1, style=4`. For
-  `style ∈ {1,2,3}` the trailing should be `LOAD(borderw)`. No fixture
-  in `17_more_components` exercises this; need a `style=1/2/3` button
-  save to verify.
+- **Other types with if-else templates — DONE for Checkbox/Radio**
+  (bytecode-breadth). `_encode_checkbox_init` (lei 56) and
+  `_encode_radio_init` (lei 57) emit the `sya0`/`sya1` scratch +
+  `if(val==1){…}` templates and are **byte-verified** against
+  `03_untested-components/untested.tft` c0/r0
+  (`test_bytecode_breadth.py::test_checkbox_radio_init_verified`). Findings:
+  checkbox's second scratch is `sya1 = 04 04 08` (index 8, not the
+  previously-assumed 7); the 'D'-build circle opcodes are `cirs = 09 18 04`
+  / `cir = 09 04 04`; checkbox appends a trailing `draw3d` bevel border.
+  **Prog (106) dir=1 (vertical)** is now emitted (`val*h/100` +
+  bottom-anchored fills) but IL-DERIVED-UNVERIFIED (no dir≠0 fixture);
+  locked in `test_prog_dir1_vertical_il_derived_unverified`. Prog dir∈{2,3}
+  (picture-fill) still stubbed.
+- **`style != 4` button paths — DONE** (bytecode-breadth). The setbrush
+  trailing now follows the full `Getatt_Codes` sta=1 dispatch: style=1 →
+  the **borderw value inlined as ASCII** (borderw has attposup -1, a
+  compile-time constant — the task's "LOAD(borderw)" was imprecise; the IL
+  bakes the value, not a LOAD), style∈{2,3,4} → literal `'1'`, draw3d bevel
+  only for style=4. style=1/2/3 are IL-DERIVED-UNVERIFIED (no fixture);
+  style=4 stays byte-verified. Locked in
+  `test_button_style{1,23,4}_*` in `test_bytecode_breadth.py`.
 - **GText secondary blocks (`09 24 08` scroll-init, `4c 20 03`
-  motion-jmp)** — the Ref event's setbrush + zstr blocks are
-  byte-identical, but the two trailing blocks (which arm the scrolling
-  motion handler) are not yet emitted. These are not part of the Ref
-  event proper — they belong to the slide event chain.
+  motion-jmp) — DONE** (bytecode-breadth). `encode_gtext_scroll_blocks`
+  emits `09 24 08 LOAD(en),2,LOAD(tim),0` + the `4c 20 03 <addr>` motion-jmp
+  marker; **byte-verified** against `17_more_components/17.tft` g0
+  (`test_gtext_scroll_blocks_verified`). The `L` addr is a non-content-
+  derivable label key (like the `S` biaoji) supplied by the caller.
 - **Allocator integration with the page-level writer** — the
   `LongAttrAllocator` materialises the byte image of the long-string
   region but the caller still needs to wire its output into the

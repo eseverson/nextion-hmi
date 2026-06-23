@@ -675,11 +675,28 @@ So `0..999` (3-digit max) and `-1..-99` (1- or 2-digit + sign = ≤3
 chars) are inline. `1000` and `-100` upward are long-form. The
 encoder helper in `script_compiler_extras.py` uses this rule.
 
-## Open questions / gaps
+## `&&` lowering (resolved from IL 338477–338491, bytecode-breadth)
 
-1. **`&&` corpus**. No project in the repo uses `&&`. The IL is
-   single-pathed for both `&&` and `||`, suggesting the encoding might
-   be identical, but the VM semantics for `&&` need verification.
+The `GetbianyiCodes` dispatch at IL_05a3 keys on the condition's final
+endid (`loc.0`):
+
+- **endid 250 (`&&`)** → `beq IL_05b8` pushes 0 → falls to the
+  **non-negated** clause-emit path.
+- **endid 251 (`||`)** → `loc.0 != 255` → `brtrue IL_06d1`, the
+  **negated** path (each early clause negated via `getfanyiif`, verified).
+
+So `&&` and `||` do NOT share the negation path. The encoder
+(`script_compiler_extras.emit_if_chain(..., connector="&&")`) lowers an
+`&&` chain as: every clause keeps its **natural (un-negated)** comparator
+and targets "skip past the body", so the body runs only when ALL clauses
+hold (AND short-circuit via the VM's "cjmp jumps on FAIL" rule:
+`cjmp(a, skip); cjmp(b, skip); body`). `condition_connector()` detects the
+connector and rejects mixed `&&`/`||` in one condition (matches
+`chonggouifwhile`'s uniform-separator requirement). **IL-DERIVED,
+UNVERIFIED** — no `&&` fixture exists; the lowering is golden-locked in
+`tests/sim/test_bytecode_breadth.py` (`test_and_chain_*`).
+
+## Open questions / gaps
 2. **`for` loop**. No `for` exists in the project corpus (16_loop has a
    `while`). The init/inc lowering is documented from IL only,
    untested against bytecode.
