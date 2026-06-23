@@ -737,6 +737,41 @@ at file offset 0xC8. Verified byte-identical for all 5 fixtures
   property of the bootloader/driver/font composition of the resources
   blob, not derivable from project content alone.
 
+## 4b. From-scratch resources-region generation (me/miata-dash#39) — VERDICT
+
+`scripts/lib/resources_generator.py` (+ `tests/sim/test_resources_generator.py`,
+16 tests). An optional `generate_resources=` flag is threaded into
+`compile_hmi`/`compile_from_model`/`author_tft`; it regenerates the picture
+sub-region and **falls back to the reference copy** when generation isn't
+byte-exact — verified to never change the output vs the default path
+(`test_compile_generate_mode_is_byte_identical`).
+
+- **Pictures (RGB565) — VERIFIED byte-exact** vs `15_picture`.
+  `build_picture_block` reproduces the 24-byte picxinxi record AND the
+  pixel block (20-byte zero header + `W·H·2` RGB565-LE) byte-for-byte. The
+  RGB565 fold (`>>3/>>2/>>3`) is stable, so a re-encode of the editor's own
+  pixels is identical. The compiler-side `_regenerate_picture_region`
+  rebuilds the whole `picxinxiadd..zimoxinxiadd` span byte-exact.
+- **Resources-coupled descriptors — VERIFIED** (the picxinxi/zimoxinxi
+  table contents + the appinf1 offsets via `compute_appinf1`, round-tripped
+  against `15_picture`). PARTIAL only in that `picxinxi_offset_in_resources`
+  (`0x48b5d`) is a property of the fixed bootloader/driver/GB2312-index blob
+  and stays caller-supplied (not project-derivable).
+- **Fonts (`.zi` rasterization) — INFEASIBLE byte-exact (hard wall).**
+  Header + codepage ranges + glyph-index metrics ARE reproducible
+  (`describe_zi_font`, locked golden). Glyph PIXELS are not: the editor's
+  glyphs are 3-bit anti-aliased (mode `0x03`); a per-glyph best-fit
+  alignment sweep (size/baseline/x-offset) of the same Liberation Serif TTF
+  via freetype matches only **~82% of alpha cells and 0 glyphs exactly**
+  (`test_font_pixels_not_reproducible_headlessly`). The residual is the
+  editor's own rasterizer (its hinting + AA ramp + sub-pixel positioning),
+  not reproducible from the public font + format alone.
+
+**Recommendation: #39 = WON'T-FIX-BY-DESIGN for fonts.** Reuse-from-
+reference stays the permanent approach for the font sub-region (and the
+fixed bootloader prefix). Pictures can be authored from scratch; the module
+exposes that path for a future picture-authoring use case.
+
 ## 5. `main.HMI` writer
 
 **Where it stands**: full 96-byte `hmifilehead` schema decoded

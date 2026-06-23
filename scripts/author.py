@@ -37,19 +37,25 @@ for _p in (str(_REPO_ROOT), str(_LIB_DIR)):
         sys.path.insert(0, _p)
 
 
-def author_tft(ir, resources_source) -> bytes:
+def author_tft(ir, resources_source, generate_resources=False) -> bytes:
     """Emit the ``.tft`` bytes for a :class:`project_ir.ProjectIR`.
 
     ``resources_source`` is a reference ``.tft`` of the same model/font
     composition — its resources prefix + resources-coupled appinf1 fields +
     editor-version profile are reused (out of scope), exactly as in
     :func:`compile_hmi.compile_hmi`.
+
+    ``generate_resources`` (default False) opts into from-scratch picture-
+    region generation (me/miata-dash#39); it is byte-exact for pictures and
+    falls back to the reference copy for fonts + the bootloader prefix, so
+    the output is identical to the default path.
     """
     from scripts.lib.compile_hmi import compile_from_model
     from scripts.lib.project_ir import pages_from_ir
 
     pages = pages_from_ir(ir)
-    return compile_from_model(pages, ir.program_s, resources_source)
+    return compile_from_model(pages, ir.program_s, resources_source,
+                              generate_resources=generate_resources)
 
 
 def author_main_hmi(ir) -> bytes:

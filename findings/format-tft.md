@@ -207,6 +207,34 @@ F-series; Picture component records reference them by index. The
 slot-kind decoder in [`scripts/lib/tft_format.py`](../scripts/lib/tft_format.py)
 walks every section.
 
+**Picture layout (verified byte-exact against `15_picture`, F-series).**
+At `picxinxiadd`: `picqyt` × 24-byte `picxinxi` index records, then the
+pixel data contiguously up to `zimoxinxiadd`.
+
+```
+picxinxi record (24 B):
+  +0  u8   qumo            (0x0a observed)
+  +1  u8   quality         (0x64 = 100)
+  +2  u8   alphaen         (1 = alpha header present)
+  +3  u8   picdatatype     (3 = uncompressed RGB565 + 20-byte header)
+  +4  u16  pictureid
+  +6  u8   encodeen
+  +7  u8   res             (0)
+  +8  u32  pixeldata_off   (record→pixels; 24 for a single picture)
+  +12 u16  width
+  +14 u16  height
+  +16 u32  imgbytesize     (= 20 + W·H·2)
+  +20 i32  alphaaddr       (0 when inline)
+
+pixel block: 20 zero bytes + W·H·2 RGB565-LE pixels
+```
+
+A from-scratch picture writer (`scripts/lib/resources_generator.py`)
+reproduces both the record and the pixel block byte-for-byte; RGB565
+truncation (`>>3/>>2/>>3`) is stable so the re-encode matches the editor.
+The font sub-block (`.zi` glyph pixels) is NOT reproducible — see
+[`next-steps.md`](next-steps.md) §4b (me/miata-dash#39, won't-fix-by-design).
+
 ### Usercode section (0x70000..file_size − 4)
 
 The usercode region holds, in order:
